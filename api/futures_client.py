@@ -66,11 +66,12 @@ class FuturesClient:
                         #print(f"[DEBUG] Price updated: ${price:,.2f}")  # Comment out to reduce spam
                         
                         now = time.time()
+                        is_first = len(self.prices) == 0
                         if now - self.last_sample_time >= self.sample_interval:
                             self.prices.append((now, price))
                             self.last_sample_time = now
                         
-                        if len(self.prices) == 1:
+                        if is_first and len(self.prices) == 1:
                             print(f"First price received: ${price:,.2f}")
                     elif "code" in data and "msg" in data:  # error from binance
                         print(f"Binance error for {self.symbol}: {data['msg']}")
