@@ -95,7 +95,7 @@ class RiskManager:
         
         return multiplier
         
-    def calculate_contracts(self, price, asset_name, multiplier=None, recent_pnl_pct=None, win_prob=0.55):
+    def calculate_contracts(self, price, asset_name, multiplier=None, recent_pnl_pct=None, win_prob=None):
         """
         Calculate position size using Kelly Criterion for optimal growth.
         
@@ -104,7 +104,7 @@ class RiskManager:
             asset_name: Name of the asset (for exposure tracking)
             multiplier: Option multiplier (higher = more leverage)
             recent_pnl_pct: Recent performance adjustment
-            win_prob: Probability of winning from ML model
+            win_prob: Probability of winning from ML/EV/rule-based estimator (None = use historical)
         
         Returns:
             Number of contracts to trade
@@ -113,8 +113,11 @@ class RiskManager:
         avg_win, avg_loss = self.kelly_sizer.get_avg_win_loss()
         win_rate = self.kelly_sizer.get_win_rate()
         
-        # Use provided win_prob if available, otherwise use historical win rate
-        effective_win_prob = win_prob if win_prob > 0.5 else max(0.5, win_rate)
+        # Use provided win_prob if available, otherwise fall back to historical win rate or 0.55
+        if win_prob is not None and win_prob > 0.5:
+            effective_win_prob = win_prob
+        else:
+            effective_win_prob = max(0.55, win_rate) if win_rate > 0.5 else 0.55
         
         # Calculate optimal contracts using Kelly
         contracts = self.kelly_sizer.calculate_contracts(

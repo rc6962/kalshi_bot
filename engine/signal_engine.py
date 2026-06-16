@@ -243,7 +243,9 @@ class SignalEngine:
         ticker:      full Kalshi market ticker (enables entry filter, distance check, cooldowns)
         market_meta: raw market metadata dict (used to resolve threshold cleanly)
 
-        Returns: signal string ("ENTER_YES" or "ENTER_NO") or None if no valid signal
+        Returns: (signal, win_prob) tuple.
+                 signal is "ENTER_YES", "ENTER_NO", or None.
+                 win_prob is float (0-1) or None if no signal.
         """
         # Wrap in try/except so a crash in one asset's ticker never kills the event loop
         try:
@@ -252,7 +254,7 @@ class SignalEngine:
                                         hour_of_day, ticker=ticker, market_meta=market_meta)
         except Exception as exc:
             print(f"[SignalEngine] evaluate() crashed for {asset_name}: {exc}")
-            return None
+            return (None, None)
 
     def _evaluate_inner(self, asset_name, bid, ask, bid_size=None, ask_size=None, strike=None, spot_price=None,
                         multiplier=1.0, time_remaining=0,
@@ -322,7 +324,7 @@ class SignalEngine:
                     bid, ask, bid_size, ask_size, spot_price, strike,
                     f"entry_filter:{ef_result['skip_reason']}"
                 )
-                return None
+                return (None, None)
 
         # --- Fast early exits (cheapest checks first) ---
         if time_remaining < NO_ENTRY_LAST_SECONDS:
@@ -330,7 +332,7 @@ class SignalEngine:
                                 time_remaining, recent_move_pct, futures_trend,
                                 bid, ask, bid_size, ask_size, spot_price, strike,
                                 "time_remaining_too_low")
-            return None
+            return (None, None)
 
         # Multiplier range check (skip when EV mode is active — EV is a superior filter)
         if not USE_EV_ENTRY:
@@ -339,7 +341,7 @@ class SignalEngine:
                                     time_remaining, recent_move_pct, futures_trend,
                                     bid, ask, bid_size, ask_size, spot_price, strike,
                                     f"multiplier_out_of_range:{multiplier}")
-                return None
+                return (None, None)
 
         # 1. Asset Tier Parameter Lookup
         tier = "HIGH_CAP" if asset_name in ASSET_TIERS.get("HIGH_CAP", []) else "ALTCOIN"
@@ -357,7 +359,7 @@ class SignalEngine:
                                     time_remaining, recent_move_pct, futures_trend,
                                     bid, ask, bid_size, ask_size, spot_price, strike,
                                     f"spread_too_wide:{spread_pct:.2%}")
-                return None
+                return (None, None)
 
         # 3. Strike Proximity Check
         strike_distance_pct = 0.0
@@ -378,20 +380,20 @@ class SignalEngine:
                                         time_remaining, recent_move_pct, futures_trend,
                                         bid, ask, bid_size, ask_size, spot_price, strike,
                                         f"strike_too_far:{strike_distance_pct:.2%}")
-                    return None
+                    return (None, None)
             except (TypeError, ZeroDivisionError):
                 self._log_rejection(asset_name, None, None, spread_pct, 0.0, multiplier,
                                     time_remaining, recent_move_pct, futures_trend,
                                     bid, ask, bid_size, ask_size, spot_price, strike,
                                     f"strike_not_numeric:{strike}")
-                return None
+                return (None, None)
         elif strike is not None:
             # Strike present but not parseable as a positive number
             self._log_rejection(asset_name, None, None, spread_pct, 0.0, multiplier,
                                 time_remaining, recent_move_pct, futures_trend,
                                 bid, ask, bid_size, ask_size, spot_price, strike,
                                 f"strike_not_numeric:{strike}")
-            return None
+            return (None, None)
 
         # 4. Determine raw signal
         raw_signal = None
@@ -405,7 +407,7 @@ class SignalEngine:
                                 time_remaining, recent_move_pct, futures_trend,
                                 bid, ask, bid_size, ask_size, spot_price, strike,
                                 f"move_below_threshold:{recent_move_pct:.6f}")
-            return None
+            return (None, None)
         
         # 5. Price filter: never pay more than $0.50 per contract
         #
@@ -429,7 +431,7 @@ class SignalEngine:
                                 time_remaining, recent_move_pct, futures_trend,
                                 bid, ask, bid_size, ask_size, spot_price, strike,
                                 f"contract_price_missing:bid={bid}_ask={ask}_mult={multiplier}")
-            return None
+            return (None, None)
         try:
             cost_float = float(actual_cost) if not isinstance(actual_cost, (int, float)) else actual_cost
             if cost_float > 0.50:
@@ -437,7 +439,7 @@ class SignalEngine:
                                     time_remaining, recent_move_pct, futures_trend,
                                     bid, ask, bid_size, ask_size, spot_price, strike,
                                     f"contract_price_too_high:{cost_float:.3f}")
-                return None
+                return (None, None)
             
             # Prevent buying extremely cheap options where spread friction is too high
             from config import MIN_CONTRACT_PRICE
@@ -446,13 +448,13 @@ class SignalEngine:
                                     time_remaining, recent_move_pct, futures_trend,
                                     bid, ask, bid_size, ask_size, spot_price, strike,
                                     f"contract_price_too_low:{cost_float:.3f}")
-                return None
+                return (None, None)
         except (ValueError, TypeError):
             self._log_rejection(asset_name, raw_signal, actual_cost, spread_pct, strike_distance_pct, multiplier,
                                 time_remaining, recent_move_pct, futures_trend,
                                 bid, ask, bid_size, ask_size, spot_price, strike,
                                 f"invalid_contract_price:{actual_cost}")
-            return None
+            return (None, None)
         # ev_price is the YES-equivalent used by _calculate_ev
         if ev_price is None or ev_price < 0 or ev_price > 1.0:
             ev_price = actual_cost  # fallback
@@ -477,7 +479,7 @@ class SignalEngine:
                                 time_remaining, recent_move_pct, futures_trend,
                                 bid, ask, bid_size, ask_size, spot_price, strike,
                                 reason)
-            return None
+            return (None, None)
         elif ml_prob is not None:
             print(f"[SignalEngine] ML filter passed for {asset_name}: prob={ml_prob:.4f}")
             
@@ -504,13 +506,13 @@ class SignalEngine:
                                     time_remaining, recent_move_pct, futures_trend,
                                     bid, ask, bid_size, ask_size, spot_price, strike,
                                     f"ev_too_low:ev={ev:.4f}_winprob={win_prob:.3f}_{prob_source}")
-                return None
+                return (None, None)
             
             print(f"[SignalEngine] EV check passed: {raw_signal} ev={ev:.4f} win_prob={win_prob:.3f} ({prob_source}) price={ev_price:.3f} cost={actual_cost:.3f}")
             
             # If EV passes, skip remaining rule-based filters (they're already priced in)
             # Note: Exposure limit enforcement is handled by RiskManager.calculate_contracts()
-            return raw_signal
+            return (raw_signal, win_prob)
 
         # --- Legacy rule-based filters (used only when USE_EV_ENTRY=False) ---
         
@@ -524,7 +526,7 @@ class SignalEngine:
                                         time_remaining, recent_move_pct, futures_trend,
                                         bid, ask, bid_size, ask_size, spot_price, strike,
                                         f"obi_too_low:{imbalance:.3f}")
-                    return None
+                    return (None, None)
 
         # 8. Time-of-day filter
         if hour_of_day is not None:
@@ -533,7 +535,7 @@ class SignalEngine:
                                     time_remaining, recent_move_pct, futures_trend,
                                     bid, ask, bid_size, ask_size, spot_price, strike,
                                     "low_liquidity_hours")
-                return None
+                return (None, None)
         
         # 9. Futures trend alignment
         if futures_trend is not None and futures_trend != 0:
@@ -543,13 +545,20 @@ class SignalEngine:
                                         time_remaining, recent_move_pct, futures_trend,
                                         bid, ask, bid_size, ask_size, spot_price, strike,
                                         "counter_trend_too_small")
-                    return None
+                    return (None, None)
             elif raw_signal == "ENTER_NO" and futures_trend > 0:
                 if abs(recent_move_pct) < params["IMPULSE_THRESHOLD_PCT"] * 1.5:
                     self._log_rejection(asset_name, raw_signal, actual_cost, spread_pct, strike_distance_pct, multiplier,
                                         time_remaining, recent_move_pct, futures_trend,
                                         bid, ask, bid_size, ask_size, spot_price, strike,
                                         "counter_trend_too_small")
-                    return None
+                    return (None, None)
 
-        return raw_signal
+        # Determine win_prob for non-EV path
+        # Priority: ML > rule-based estimation
+        if ml_prob is not None:
+            win_prob = ml_prob
+        else:
+            win_prob = self._estimate_win_prob(recent_move_pct, time_remaining)
+        
+        return (raw_signal, win_prob)

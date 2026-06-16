@@ -718,7 +718,7 @@ class EventLoop:
                 yes_ask = yes_price
             
             print(f"[{self.asset}] Calling signal.evaluate with spot={spot}, strike={self.strike}, multiplier={multiplier}")
-            signal = self.signal.evaluate(
+            signal_result = self.signal.evaluate(
                 asset_name=self.asset,
                 bid=yes_bid,
                 ask=yes_ask,
@@ -731,9 +731,20 @@ class EventLoop:
                 recent_move_pct=move_pct,
                 futures_trend=self.futures.get_trend_direction()
             )
+            
+            # Unpack (signal, win_prob) tuple from SignalEngine
+            if isinstance(signal_result, tuple):
+                signal, win_prob = signal_result
+            else:
+                signal = signal_result
+                win_prob = None
+            
+            # Fallback: if no win_prob returned, use conservative default
+            if win_prob is None:
+                win_prob = 0.55
 
             if signal:
-                print(f"[{self.asset}] Signal: {signal}, Yes/No: {yes_price}/{no_price}, Spot: {spot}, Strike: {self.strike}")
+                print(f"[{self.asset}] Signal: {signal}, win_prob={win_prob:.3f}, Yes/No: {yes_price}/{no_price}, Spot: {spot}, Strike: {self.strike}")
 
                 # Place order based on signal
                 side = "yes" if signal == "ENTER_YES" else "no"
@@ -756,7 +767,7 @@ class EventLoop:
                     asset_name=self.asset,
                     multiplier=multiplier,
                     recent_pnl_pct=self.risk.get_recent_performance(),
-                    win_prob=0.55  # Default win probability
+                    win_prob=win_prob
                 )
                 
                 # Make sure we have at least 1 contract if the algorithm allows it
