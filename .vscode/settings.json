@@ -1,0 +1,26 @@
+{
+  "editor.formatOnSave": true,
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "typescript.tsserver.experimental.enableProjectDiagnostics": true,
+  "typescript.preferences.importModuleSpecifier": "relative",
+  "files.associations": {
+    "*.perplexicode": "typescript"
+  },
+  "chat.mcp.serverSampling": {
+    "kalshi_bot/.vscode/mcp.json: perplexity-webui-scraper": {
+      "allowedModels": ["copilotcli/claude-haiku-4.5"]
+    }
+  },
+  "workbench.editor.decorations.badges": false,
+  "freeAI.suggestions.enabled": true,
+  "freeAI.debug": true,
+  "git.ignoreLimitWarning": true,
+  "python.defaultInterpreterPath": "C:\\Users\\RickCain\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+  "python.terminal.activateEnvironment": true,
+  "python.terminal.activateEnvInCurrentTerminal": true,
+  "python.linting.enabled": true,
+  "python.linting.pylintEnabled": false,
+  "python.linting.flake8Enabled": true,
+  "python.formatting.provider": "black",
+  "cSpell.words": ["aiohttp"]
+}

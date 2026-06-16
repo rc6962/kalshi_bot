@@ -1,0 +1,371 @@
+{
+  "cursor": "CgYI3Ne90QYSFEtYU09MMTVNLTI2SlVOMTQyMzAw",
+  "events": [
+    {
+      "available_on_brokers": false,
+      "category": "Crypto",
+      "collateral_return_type": "",
+      "event_ticker": "KXSOL15M-26JUN150000",
+      "last_updated_ts": "2026-06-14T00:02:25.241976Z",
+      "markets": [
+        {
+          "can_close_early": true,
+          "close_time": "2026-06-15T04:00:00Z",
+          "created_time": "2026-06-14T00:02:25.217725Z",
+          "event_ticker": "KXSOL15M-26JUN150000",
+          "expected_expiration_time": "2026-06-15T04:05:00Z",
+          "expiration_time": "2026-06-22T04:00:00Z",
+          "expiration_value": "",
+          "fractional_trading_enabled": true,
+          "last_price_dollars": "0.0000",
+          "latest_expiration_time": "2026-06-22T04:00:00Z",
+          "liquidity_dollars": "0.0000",
+          "market_type": "binary",
+          "no_ask_dollars": "1.0000",
+          "no_bid_dollars": "1.0000",
+          "no_sub_title": "Target price: TBD",
+          "notional_value_dollars": "1.0000",
+          "occurrence_datetime": "2026-06-15T04:05:00Z",
+          "open_interest_fp": "0.00",
+          "open_time": "2026-06-15T03:45:00Z",
+          "previous_price_dollars": "0.0000",
+          "previous_yes_ask_dollars": "0.0000",
+          "previous_yes_bid_dollars": "0.0000",
+          "price_level_structure": "tapered_deci_cent",
+          "price_ranges": [
+            {
+              "end": "0.1000",
+              "start": "0.0000",
+              "step": "0.0010"
+            },
+            {
+              "end": "0.9000",
+              "start": "0.1000",
+              "step": "0.0100"
+            },
+            {
+              "end": "1.0000",
+              "start": "0.9000",
+              "step": "0.0010"
+            }
+          ],
+          "response_price_units": "usd_cent",
+          "result": "",
+          "rules_primary": "If the simple average of the sixty seconds of CF Benchmarks' SOLUSDRTI before 12:00 AM EDT on Jun 15, 2026 is at least the simple average of the sixty seconds of CF Benchmarks' SOLUSDRTI before 11:45 PM EDT on June 14, 2026, then the market resolves to Yes.",
+          "rules_secondary": "Not all cryptocurrency price data is the same. While checking a source like Google or Coinbase may help guide your decision, the price used to determine this market is based on CF Benchmarks' corresponding Real Time Index (RTI). At the last minute before expiration, 60 RTI prices are collected. The official and final value is the average of these prices, rounded to the nearest 4 decimal places.",
+          "settlement_timer_seconds": 1,
+          "status": "initialized",
+          "ticker": "KXSOL15M-26JUN150000-00",
+          "title": "SOL price up in next 15 mins?",
+          "updated_time": "2026-06-14T00:02:25.217766Z",
+          "volume_24h_fp": "0.00",
+          "volume_fp": "0.00",
+          "yes_ask_dollars": "0.0000",
+          "yes_ask_size_fp": "0.00",
+          "yes_bid_dollars": "0.0000",
+          "yes_bid_size_fp": "0.00",
+          "yes_sub_title": "Target price: TBD"
+        }
+      ],
+      "mutually_exclusive": false,
+      "series_ticker": "KXSOL15M",
+      "strike_date": "2026-06-15T04:00:00Z",
+      "strike_period": "",
+      "sub_title": "Jun 14 - 11:45PM EDT to 12:00AM EDT",
+      "title": "SOL Up or Down - 15 minutes"
+    },
+    {
+      "available_on_brokers": false,
+      "category": "Crypto",
+      "collateral_return_type": "",
+      "event_ticker": "KXSOL15M-26JUN142345",
+      "last_updated_ts": "2026-06-14T00:02:24.92155Z",
+      "markets": [
+        {
+          "can_close_early": true,
+          "close_time": "2026-06-15T03:45:00Z",
+          "created_time": "2026-06-14T00:02:24.909633Z",
+          "event_ticker": "KXSOL15M-26JUN142345",
+          "expected_expiration_time": "2026-06-15T03:50:00Z",
+          "expiration_time": "2026-06-22T03:45:00Z",
+          "expiration_value": "",
+          "fractional_trading_enabled": true,
+          "last_price_dollars": "0.0000",
+          "latest_expiration_time": "2026-06-22T03:45:00Z",
+          "liquidity_dollars": "0.0000",
+          "market_type": "binary",
+          "no_ask_dollars": "1.0000",
+          "no_bid_dollars": "1.0000",
+          "no_sub_title": "Target price: TBD",
+          "notional_value_dollars": "1.0000",
+          "occurrence_datetime": "2026-06-15T03:50:00Z",
+          "open_interest_fp": "0.00",
+          "open_time": "2026-06-15T03:30:00Z",
+          "previous_price_dollars": "0.0000",
+          "previous_yes_ask_dollars": "0.0000",
+          "previous_yes_bid_dollars": "0.0000",
+          "price_level_structure": "tapered_deci_cent",
+          "price_ranges": [
+            {
+              "end": "0.1000",
+              "start": "0.0000",
+              "step": "0.0010"
+            },
+            {
+              "end": "0.9000",
+              "start": "0.1000",
+              "step": "0.0100"
+            },
+            {
+              "end": "1.0000",
+              "start": "0.9000",
+              "step": "0.0010"
+            }
+          ],
+          "response_price_units": "usd_cent",
+          "result": "",
+          "rules_primary": "If the simple average of the sixty seconds of CF Benchmarks' SOLUSDRTI before 11:45 PM EDT on Jun 14, 2026 is at least the simple average of the sixty seconds of CF Benchmarks' SOLUSDRTI before 11:30 PM EDT on June 14, 2026, then the market resolves to Yes.",
+          "rules_secondary": "Not all cryptocurrency price data is the same. While checking a source like Google or Coinbase may help guide your decision, the price used to determine this market is based on CF Benchmarks' corresponding Real Time Index (RTI). At the last minute before expiration, 60 RTI prices are collected. The official and final value is the average of these prices, rounded to the nearest 4 decimal places.",
+          "settlement_timer_seconds": 1,
+          "status": "initialized",
+          "ticker": "KXSOL15M-26JUN142345-45",
+          "title": "SOL price up in next 15 mins?",
+          "updated_time": "2026-06-14T00:02:24.909669Z",
+          "volume_24h_fp": "0.00",
+          "volume_fp": "0.00",
+          "yes_ask_dollars": "0.0000",
+          "yes_ask_size_fp": "0.00",
+          "yes_bid_dollars": "0.0000",
+          "yes_bid_size_fp": "0.00",
+          "yes_sub_title": "Target price: TBD"
+        }
+      ],
+      "mutually_exclusive": false,
+      "series_ticker": "KXSOL15M",
+      "strike_date": "2026-06-15T03:45:00Z",
+      "strike_period": "",
+      "sub_title": "Jun 14 - 11:30PM EDT to 11:45PM EDT",
+      "title": "SOL Up or Down - 15 minutes"
+    },
+    {
+      "available_on_brokers": false,
+      "category": "Crypto",
+      "collateral_return_type": "",
+      "event_ticker": "KXSOL15M-26JUN142330",
+      "last_updated_ts": "2026-06-14T00:02:24.641404Z",
+      "markets": [
+        {
+          "can_close_early": true,
+          "close_time": "2026-06-15T03:30:00Z",
+          "created_time": "2026-06-14T00:02:24.616941Z",
+          "event_ticker": "KXSOL15M-26JUN142330",
+          "expected_expiration_time": "2026-06-15T03:35:00Z",
+          "expiration_time": "2026-06-22T03:30:00Z",
+          "expiration_value": "",
+          "fractional_trading_enabled": true,
+          "last_price_dollars": "0.0000",
+          "latest_expiration_time": "2026-06-22T03:30:00Z",
+          "liquidity_dollars": "0.0000",
+          "market_type": "binary",
+          "no_ask_dollars": "1.0000",
+          "no_bid_dollars": "1.0000",
+          "no_sub_title": "Target price: TBD",
+          "notional_value_dollars": "1.0000",
+          "occurrence_datetime": "2026-06-15T03:35:00Z",
+          "open_interest_fp": "0.00",
+          "open_time": "2026-06-15T03:15:00Z",
+          "previous_price_dollars": "0.0000",
+          "previous_yes_ask_dollars": "0.0000",
+          "previous_yes_bid_dollars": "0.0000",
+          "price_level_structure": "tapered_deci_cent",
+          "price_ranges": [
+            {
+              "end": "0.1000",
+              "start": "0.0000",
+              "step": "0.0010"
+            },
+            {
+              "end": "0.9000",
+              "start": "0.1000",
+              "step": "0.0100"
+            },
+            {
+              "end": "1.0000",
+              "start": "0.9000",
+              "step": "0.0010"
+            }
+          ],
+          "response_price_units": "usd_cent",
+          "result": "",
+          "rules_primary": "If the simple average of the sixty seconds of CF Benchmarks' SOLUSDRTI before 11:30 PM EDT on Jun 14, 2026 is at least the simple average of the sixty seconds of CF Benchmarks' SOLUSDRTI before 11:15 PM EDT on June 14, 2026, then the market resolves to Yes.",
+          "rules_secondary": "Not all cryptocurrency price data is the same. While checking a source like Google or Coinbase may help guide your decision, the price used to determine this market is based on CF Benchmarks' corresponding Real Time Index (RTI). At the last minute before expiration, 60 RTI prices are collected. The official and final value is the average of these prices, rounded to the nearest 4 decimal places.",
+          "settlement_timer_seconds": 1,
+          "status": "initialized",
+          "ticker": "KXSOL15M-26JUN142330-30",
+          "title": "SOL price up in next 15 mins?",
+          "updated_time": "2026-06-14T00:02:24.616981Z",
+          "volume_24h_fp": "0.00",
+          "volume_fp": "0.00",
+          "yes_ask_dollars": "0.0000",
+          "yes_ask_size_fp": "0.00",
+          "yes_bid_dollars": "0.0000",
+          "yes_bid_size_fp": "0.00",
+          "yes_sub_title": "Target price: TBD"
+        }
+      ],
+      "mutually_exclusive": false,
+      "series_ticker": "KXSOL15M",
+      "strike_date": "2026-06-15T03:30:00Z",
+      "strike_period": "",
+      "sub_title": "Jun 14 - 11:15PM EDT to 11:30PM EDT",
+      "title": "SOL Up or Down - 15 minutes"
+    },
+    {
+      "available_on_brokers": false,
+      "category": "Crypto",
+      "collateral_return_type": "",
+      "event_ticker": "KXSOL15M-26JUN142315",
+      "last_updated_ts": "2026-06-14T00:02:24.341321Z",
+      "markets": [
+        {
+          "can_close_early": true,
+          "close_time": "2026-06-15T03:15:00Z",
+          "created_time": "2026-06-14T00:02:24.323239Z",
+          "event_ticker": "KXSOL15M-26JUN142315",
+          "expected_expiration_time": "2026-06-15T03:20:00Z",
+          "expiration_time": "2026-06-22T03:15:00Z",
+          "expiration_value": "",
+          "fractional_trading_enabled": true,
+          "last_price_dollars": "0.0000",
+          "latest_expiration_time": "2026-06-22T03:15:00Z",
+          "liquidity_dollars": "0.0000",
+          "market_type": "binary",
+          "no_ask_dollars": "1.0000",
+          "no_bid_dollars": "1.0000",
+          "no_sub_title": "Target price: TBD",
+          "notional_value_dollars": "1.0000",
+          "occurrence_datetime": "2026-06-15T03:20:00Z",
+          "open_interest_fp": "0.00",
+          "open_time": "2026-06-15T03:00:00Z",
+          "previous_price_dollars": "0.0000",
+          "previous_yes_ask_dollars": "0.0000",
+          "previous_yes_bid_dollars": "0.0000",
+          "price_level_structure": "tapered_deci_cent",
+          "price_ranges": [
+            {
+              "end": "0.1000",
+              "start": "0.0000",
+              "step": "0.0010"
+            },
+            {
+              "end": "0.9000",
+              "start": "0.1000",
+              "step": "0.0100"
+            },
+            {
+              "end": "1.0000",
+              "start": "0.9000",
+              "step": "0.0010"
+            }
+          ],
+          "response_price_units": "usd_cent",
+          "result": "",
+          "rules_primary": "If the simple average of the sixty seconds of CF Benchmarks' SOLUSDRTI before 11:15 PM EDT on Jun 14, 2026 is at least the simple average of the sixty seconds of CF Benchmarks' SOLUSDRTI before 11:00 PM EDT on June 14, 2026, then the market resolves to Yes.",
+          "rules_secondary": "Not all cryptocurrency price data is the same. While checking a source like Google or Coinbase may help guide your decision, the price used to determine this market is based on CF Benchmarks' corresponding Real Time Index (RTI). At the last minute before expiration, 60 RTI prices are collected. The official and final value is the average of these prices, rounded to the nearest 4 decimal places.",
+          "settlement_timer_seconds": 1,
+          "status": "initialized",
+          "ticker": "KXSOL15M-26JUN142315-15",
+          "title": "SOL price up in next 15 mins?",
+          "updated_time": "2026-06-14T00:02:24.323275Z",
+          "volume_24h_fp": "0.00",
+          "volume_fp": "0.00",
+          "yes_ask_dollars": "0.0000",
+          "yes_ask_size_fp": "0.00",
+          "yes_bid_dollars": "0.0000",
+          "yes_bid_size_fp": "0.00",
+          "yes_sub_title": "Target price: TBD"
+        }
+      ],
+      "mutually_exclusive": false,
+      "series_ticker": "KXSOL15M",
+      "strike_date": "2026-06-15T03:15:00Z",
+      "strike_period": "",
+      "sub_title": "Jun 14 - 11:00PM EDT to 11:15PM EDT",
+      "title": "SOL Up or Down - 15 minutes"
+    },
+    {
+      "available_on_brokers": false,
+      "category": "Crypto",
+      "collateral_return_type": "",
+      "event_ticker": "KXSOL15M-26JUN142300",
+      "last_updated_ts": "2026-06-14T00:02:24.061947Z",
+      "markets": [
+        {
+          "can_close_early": true,
+          "close_time": "2026-06-15T03:00:00Z",
+          "created_time": "2026-06-14T00:02:24.033826Z",
+          "event_ticker": "KXSOL15M-26JUN142300",
+          "expected_expiration_time": "2026-06-15T03:05:00Z",
+          "expiration_time": "2026-06-22T03:00:00Z",
+          "expiration_value": "",
+          "fractional_trading_enabled": true,
+          "last_price_dollars": "0.0000",
+          "latest_expiration_time": "2026-06-22T03:00:00Z",
+          "liquidity_dollars": "0.0000",
+          "market_type": "binary",
+          "no_ask_dollars": "1.0000",
+          "no_bid_dollars": "1.0000",
+          "no_sub_title": "Target price: TBD",
+          "notional_value_dollars": "1.0000",
+          "occurrence_datetime": "2026-06-15T03:05:00Z",
+          "open_interest_fp": "0.00",
+          "open_time": "2026-06-15T02:45:00Z",
+          "previous_price_dollars": "0.0000",
+          "previous_yes_ask_dollars": "0.0000",
+          "previous_yes_bid_dollars": "0.0000",
+          "price_level_structure": "tapered_deci_cent",
+          "price_ranges": [
+            {
+              "end": "0.1000",
+              "start": "0.0000",
+              "step": "0.0010"
+            },
+            {
+              "end": "0.9000",
+              "start": "0.1000",
+              "step": "0.0100"
+            },
+            {
+              "end": "1.0000",
+              "start": "0.9000",
+              "step": "0.0010"
+            }
+          ],
+          "response_price_units": "usd_cent",
+          "result": "",
+          "rules_primary": "If the simple average of the sixty seconds of CF Benchmarks' SOLUSDRTI before 11:00 PM EDT on Jun 14, 2026 is at least the simple average of the sixty seconds of CF Benchmarks' SOLUSDRTI before 10:45 PM EDT on June 14, 2026, then the market resolves to Yes.",
+          "rules_secondary": "Not all cryptocurrency price data is the same. While checking a source like Google or Coinbase may help guide your decision, the price used to determine this market is based on CF Benchmarks' corresponding Real Time Index (RTI). At the last minute before expiration, 60 RTI prices are collected. The official and final value is the average of these prices, rounded to the nearest 4 decimal places.",
+          "settlement_timer_seconds": 1,
+          "status": "initialized",
+          "ticker": "KXSOL15M-26JUN142300-00",
+          "title": "SOL price up in next 15 mins?",
+          "updated_time": "2026-06-14T00:02:24.033863Z",
+          "volume_24h_fp": "0.00",
+          "volume_fp": "0.00",
+          "yes_ask_dollars": "0.0000",
+          "yes_ask_size_fp": "0.00",
+          "yes_bid_dollars": "0.0000",
+          "yes_bid_size_fp": "0.00",
+          "yes_sub_title": "Target price: TBD"
+        }
+      ],
+      "mutually_exclusive": false,
+      "series_ticker": "KXSOL15M",
+      "strike_date": "2026-06-15T03:00:00Z",
+      "strike_period": "",
+      "sub_title": "Jun 14 - 10:45PM EDT to 11:00PM EDT",
+      "title": "SOL Up or Down - 15 minutes"
+    }
+  ],
+  "milestones": []
+}

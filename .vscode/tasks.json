@@ -1,0 +1,43 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Ask Poe (Kalshi)",
+      "type": "process",
+      "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+      "args": [
+        "${workspaceFolder}\\poe_ask.py",
+        "--mode",
+        "${input:poeMode}",
+        "--model",
+        "${input:poeModel}",
+        "--prompt",
+        "${input:poePrompt}"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    }
+  ],
+  "inputs": [
+    {
+      "id": "poeMode",
+      "type": "pickString",
+      "description": "API mode",
+      "options": ["chat", "responses"],
+      "default": "chat"
+    },
+    {
+      "id": "poeModel",
+      "type": "promptString",
+      "description": "Model name",
+      "default": "Claude-Sonnet-4.6"
+    },
+    {
+      "id": "poePrompt",
+      "type": "promptString",
+      "description": "What do you want Poe to do?"
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+aiohttp
+websockets
+cryptography
+numpy
+gspread
+google-auth
+pandas
+scikit-learn
+lightgbm

@@ -1,0 +1,271 @@
+import json
+import subprocess
+import sys
+from typing import Dict, Any, Optional
+import asyncio
+import aiohttp
+from pathlib import Path
+
+class PerplexityMCPClient:
+    """A client for interacting with Perplexity MCP server"""
+    
+    def __init__(self):
+        """Initialize the Perplexity MCP client"""
+        # Based on your .mcp.json.tmp configuration
+        self.command = "C:\\Program Files\\nodejs\\node.exe"
+        self.args = ["C:\\Users\\RickCain\\.perplexity-mcp\\start.mjs"]
+        self.process = None
+        
+    async def start_server(self):
+        """Start the Perplexity MCP server process"""
+        try:
+            # Start the MCP server as a subprocess
+            self.process = await asyncio.create_subprocess_exec(
+                self.command,
+                *self.args,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            print("Perplexity MCP server started successfully")
+        except Exception as e:
+            print(f"Failed to start Perplexity MCP server: {e}")
+            
+    async def stop_server(self):
+        """Stop the Perplexity MCP server process"""
+        if self.process and self.process.returncode is None:
+            self.process.terminate()
+            await self.process.wait()
+            
+    async def _send_request(self, method: str, params: Dict) -> Dict[str, Any]:
+        """Send a request to the MCP server"""
+        if not self.process:
+            await self.start_server()
+            
+        request = {
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params,
+            "id": 1
+        }
+        
+        try:
+            # Send request to MCP server
+            self.process.stdin.write(json.dumps(request).encode() + b'\n')
+            await self.process.stdin.drain()
+            
+            # Read response
+            line = await self.process.stdout.readline()
+            response = json.loads(line.decode())
+            return response
+        except Exception as e:
+            return {"error": str(e)}
+    
+    async def perplexity_search(self, query: str, language: str = "en-US") -> Dict[str, Any]:
+        """
+        Perform a fast web search with source citations.
+        
+        Args:
+            query (str): The search query
+            language (str): Language code (default: en-US)
+            
+        Returns:
+            Dict containing search results
+        """
+        params = {
+            "query": query,
+            "language": language
+        }
+        return await self._send_request("perplexity_search", params)
+    
+    async def perplexity_reason(self, query: str) -> Dict[str, Any]:
+        """
+        Perform step-by-step reasoning with web context.
+        Requires Pro account.
+        
+        Args:
+            query (str): The reasoning query
+            
+        Returns:
+            Dict containing reasoning results
+        """
+        params = {
+            "query": query
+        }
+        return await self._send_request("perplexity_reason", params)
+    
+    async def perplexity_research(self, query: str) -> Dict[str, Any]:
+        """
+        Generate deep multi-section research reports.
+        Requires Pro account.
+        
+        Args:
+            query (str): The research query
+            
+        Returns:
+            Dict containing research report
+        """
+        params = {
+            "query": query
+        }
+        return await self._send_request("perplexity_research", params)
+    
+    async def perplexity_ask(self, query: str, model: Optional[str] = None, 
+                      mode: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Flexible queries with explicit model/mode control.
+        
+        Args:
+            query (str): The query
+            model (str, optional): Specific model to use
+            mode (str, optional): Mode of operation
+            
+        Returns:
+            Dict containing response
+        """
+        params = {
+            "query": query
+        }
+        if model:
+            params["model"] = model
+        if mode:
+            params["mode"] = mode
+            
+        return await self._send_request("perplexity_ask", params)
+
+# Example usage functions that Copilot can help with:
+async def search_market_info(topic: str) -> Dict[str, Any]:
+    """
+    Search for market information using Perplexity.
+    
+    Args:
+        topic (str): Market topic to search for
+        
+    Returns:
+        Dict containing search results
+    """
+    client = PerplexityMCPClient()
+    await client.start_server()
+    try:
+        result = await client.perplexity_search(f"Kalshi trading {topic}")
+        return result
+    finally:
+        await client.stop_server()
+
+async def research_trading_strategy(strategy_name: str) -> Dict[str, Any]:
+    """
+    Research a specific trading strategy.
+    
+    Args:
+        strategy_name (str): Name of the trading strategy
+        
+    Returns:
+        Dict containing research report
+    """
+    client = PerplexityMCPClient()
+    await client.start_server()
+    try:
+        result = await client.perplexity_research(f"{strategy_name} trading strategy in prediction markets")
+        return result
+    finally:
+        await client.stop_server()
+
+async def get_trading_advice(question: str) -> Dict[str, Any]:
+    """
+    Get reasoning-based trading advice.
+    
+    Args:
+        question (str): Trading question
+        
+    Returns:
+        Dict containing reasoned advice
+    """
+    client = PerplexityMCPClient()
+    await client.start_server()
+    try:
+        result = await client.perplexity_reason(question)
+        return result
+    finally:
+        await client.stop_server()
+
+# Utility function to check account capabilities
+async def check_account_capabilities() -> Dict[str, Any]:
+    """
+    Check available models, account tier, and rate limits.
+    
+    Returns:
+        Dict containing account information
+    """
+    client = PerplexityMCPClient()
+    await client.start_server()
+    try:
+        result = await client._send_request("perplexity_models", {})
+        return result
+    finally:
+        await client.stop_server()
+
+# GitHub Copilot integration examples:
+def copilot_perplexity_search_example():
+    """
+    Example for GitHub Copilot: How to use Perplexity search in your code
+    
+    Example:
+        # In your code, you can use:
+        import asyncio
+        result = asyncio.run(search_market_info("Bitcoin"))
+        print(result)
+        
+    GitHub Copilot can help you:
+    1. Auto-complete the asyncio.run() pattern
+    2. Suggest parameter values based on context
+    3. Help structure the response handling
+    """
+    pass
+
+def copilot_perplexity_research_example():
+    """
+    Example for GitHub Copilot: How to use Perplexity research in your code
+    
+    Example:
+        # For in-depth analysis:
+        import asyncio
+        result = asyncio.run(research_trading_strategy("mean reversion"))
+        # Process the research results
+        
+    GitHub Copilot can help you:
+    1. Generate the asyncio code pattern
+    2. Suggest how to process the research results
+    3. Help parse the structured response
+    """
+    pass
+
+if __name__ == "__main__":
+    # Example usage
+    async def main():
+        client = PerplexityMCPClient()
+        await client.start_server()
+        
+        try:
+            # Example: Search for market information
+            result = await client.perplexity_search("latest Bitcoin price and market analysis")
+            print(json.dumps(result, indent=2))
+        finally:
+            await client.stop_server()
+            
+    asyncio.run(main()){
+  "servers": {
+    "perplexity": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "perplexity-webui-scraper[mcp]@1.0.2",
+        "perplexity-webui-scraper-mcp.exe"
+      ],
+      "env": {
+        "PERPLEXITY_SESSION_TOKEN": "JBMjU2R0NNIn0..m5RS19r_HrcyRkgL.5f7dXL4DtAZAOIQ5IlM79lcmg2FqvOVMBp6J_LKf88MED_DZDsdIKflF1cYHaOrhLC-lHwfrLtjeE7LvkEljVsdbQYrXZmvSQlzzfmgF1ijImG6Eo4Zb6lONd4OVKAO8hGuCaAtwY4rTR4Rr8XFLJJTq0xleDKB3etW-0BtS0ZPcSVq8mRXIY5-8-s79TyQQNNNPqpdQpU3tVkrBtTDrZrheTF2XzUv_O270mxjTRbQbytLgqQ1Wyh5BnozQ8QqO.s3MPqloqiID4q3Zq_RtMTQ",
+        "MODEL_NAME": "sonar-medium-online",
+        "MODEL_NAME": "sonar-medium-online"
+      }
+    }
+  }
+}

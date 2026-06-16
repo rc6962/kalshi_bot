@@ -1,0 +1,31 @@
+{
+  "name": "read-trades-extension",
+  "displayName": "Read Trades",
+  "description": "Reads trades.csv files in the current workspace and prints a summary.",
+  "version": "0.0.1",
+  "publisher": "you",
+  "engines": {
+    "vscode": "^1.76.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "read-trades.readTrades",
+        "title": "Read Trades CSVs"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "typescript": "^4.9.5",
+    "vscode": "^1.1.37"
+  }
+}
