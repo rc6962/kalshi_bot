@@ -16,8 +16,7 @@ from engine.entry_filter import (
     log_decision,
 )
 
-# ML Confidence threshold (only execute if model predicts >= this probability of profit)
-ML_CONFIDENCE_THRESHOLD = 0.55
+# ML Confidence threshold (loaded from config.py)
 MODEL_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "ml", "kalshi_lgbm_model.txt")
 VETO_LOG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "ml_veto_log.csv")
 REJECTION_LOG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "signal_rejections.jsonl")
@@ -469,19 +468,18 @@ class SignalEngine:
                 futures_trend=futures_trend,
                 spread_pct=spread_pct
             )
-            if ml_prob is not None and USE_EV_ENTRY:
-                # Apply ML Veto Filter
-                if ml_prob < ML_CONFIDENCE_THRESHOLD:
-                    reason = f"ml_low_confidence:{ml_prob:.4f}"
-                    self._log_veto(raw_signal, ml_prob, multiplier, strike_distance_pct,
-                                   recent_move_pct, time_remaining, futures_trend, spread_pct, reason)
-                    self._log_rejection(asset_name, raw_signal, actual_cost, spread_pct, strike_distance_pct, multiplier,
-                                        time_remaining, recent_move_pct, futures_trend,
-                                        bid, ask, bid_size, ask_size, spot_price, strike,
-                                        reason)
-                    return None
-                else:
-                    print(f"[SignalEngine] ML filter passed for {asset_name}: prob={ml_prob:.4f}")
+
+        if USE_ML_VETO and ml_prob is not None and ml_prob < ML_CONFIDENCE_THRESHOLD:
+            reason = f"ml_low_confidence:{ml_prob:.4f}"
+            self._log_veto(raw_signal, ml_prob, multiplier, strike_distance_pct,
+                           recent_move_pct, time_remaining, futures_trend, spread_pct, reason)
+            self._log_rejection(asset_name, raw_signal, actual_cost, spread_pct, strike_distance_pct, multiplier,
+                                time_remaining, recent_move_pct, futures_trend,
+                                bid, ask, bid_size, ask_size, spot_price, strike,
+                                reason)
+            return None
+        elif ml_prob is not None:
+            print(f"[SignalEngine] ML filter passed for {asset_name}: prob={ml_prob:.4f}")
             
 
 

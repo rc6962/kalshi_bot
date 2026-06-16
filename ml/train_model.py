@@ -32,6 +32,10 @@ def load_training_data(csv_path="ml_training_data.csv"):
     
     df = pd.read_csv(csv_path)
     
+    # Convert WIN/LOSS outcome strings to binary if present
+    if TARGET_COL in df.columns and df[TARGET_COL].dtype == object:
+        df[TARGET_COL] = df[TARGET_COL].map({"WIN": 1, "LOSS": 0})
+    
     # Auto-fill missing spread_pct if not in CSV for backward compatibility
     if "spread_pct" not in df.columns:
         print("[train_model] 'spread_pct' column missing in training data. Auto-filling with default 0.02.")

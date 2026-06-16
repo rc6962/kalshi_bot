@@ -36,7 +36,7 @@ async def main():
     load_env()
     
     # Get API key from environment or use default
-    api_key = os.getenv("KALSHI_API_KEY", "d8007edd-1341-4d12-b2ad-fed79d2e2af9")
+    api_key = os.getenv("KALSHI_API_KEY")
     private_key_path = os.getenv("KALSHI_PRIVATE_KEY_PATH", "kalshi_private_key.pem")
     
     print(f"Using Kalshi API endpoint: {KALSHI_BASE_URL}")

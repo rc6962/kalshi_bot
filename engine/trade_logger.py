@@ -164,6 +164,32 @@ class TradeLogger:
         self.try_init_sheet()
         self._update_gsheet()
 
+        # Count total rows in trades.csv to determine fill count
+        fill_count = 0
+        if os.path.exists(self.csv_path):
+            try:
+                with open(self.csv_path, "r") as f:
+                    # Subtract 1 for the header
+                    fill_count = sum(1 for line in f) - 1
+            except Exception:
+                fill_count = len(self.daily_trades)
+
+        if fill_count > 0 and fill_count % 100 == 0:
+            try:
+                import subprocess
+                import sys
+                base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                script_path = os.path.join(base_dir, "ml", "train_model.py")
+                print(f"[TradeLogger] Retraining ML model in background (total fills: {fill_count})...")
+                subprocess.Popen(
+                    [sys.executable, script_path, "--data", self.csv_path],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+            except Exception as bg_err:
+                print(f"[TradeLogger] Failed to start background training: {bg_err}")
+
     def _update_gsheet(self):
         if self._sheet is None:
             return

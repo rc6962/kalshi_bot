@@ -45,7 +45,7 @@ def manual_load_dotenv(filepath=".env"):
                     key, value = line.split("=", 1)
                     os.environ[key.strip()] = value.strip().strip('"').strip("'")
 
-API_KEY = os.getenv("KALSHI_API_KEY", "d8007edd-1341-4d12-b2ad-fed79d2e2af9")
+API_KEY = os.getenv("KALSHI_API_KEY")
 PRIVATE_KEY_PATH = "kalshi_private_key.pem"
 
 TRADE_LOG_PATH = "trades.csv"

@@ -148,6 +148,7 @@ def compute_momentum_bps(price_history: list[tuple[float, float]], lookback_seco
 # ---------------------------------------------------------------------------
 
 def infer_side(spot: float, threshold: float, momentum_bps: float,
+               time_remaining_sec: float | None = None,
                mode: str = "mean_reversion") -> str | None:
     """
     Infer YES / NO based on spot vs threshold and momentum direction.
@@ -162,6 +163,12 @@ def infer_side(spot: float, threshold: float, momentum_bps: float,
 
     Returns 'yes', 'no', or None (skip).
     """
+    if time_remaining_sec is not None:
+        if time_remaining_sec > 300:
+            mode = "continuation"
+        else:
+            mode = "mean_reversion"
+
     min_mom = cfg.MIN_MOMENTUM_ABS_BPS
     if mode == "continuation":
         if spot > threshold and momentum_bps >= min_mom:
@@ -343,7 +350,7 @@ class EntryFilter:
                 return result
 
         # 8. Side inference from momentum
-        side = infer_side(spot, threshold, momentum_bps, mode=cfg.SIDE_LOGIC_MODE)
+        side = infer_side(spot, threshold, momentum_bps, time_remaining_sec=time_remaining_sec, mode=cfg.SIDE_LOGIC_MODE)
         if side is None:
             result["skip_reason"] = f"MOMENTUM_DOES_NOT_CONFIRM_SIDE:mom={momentum_bps:.2f}bps"
             return result

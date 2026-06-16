@@ -32,7 +32,7 @@ MAX_MULTIPLIER = 100.0
 # Asset-specific thresholds (high-cap vs altcoin volatility tiers)
 ASSET_TIERS = {
     "HIGH_CAP": ["BTC", "ETH"],
-    "ALTCOIN": ["SOL", "DOGE", "XRP", "HYPE"]
+    "ALTCOIN": ["SOL", "DOGE", "XRP", "HYPE", "BNB"]
 }
 
 TIER_PARAMS = {
@@ -55,6 +55,10 @@ STRIKE_PROXIMITY_PCT = 0.015
 USE_EV_ENTRY = False
 MIN_EV_EDGE = 0.05   # Require at least 5% positive EV edge per trade (if enabled)
 
+# ML Standalone Veto Filter
+USE_ML_VETO = True
+ML_CONFIDENCE_THRESHOLD = 0.55
+
 # Debug: log raw ticker data for first N ticks to diagnose field names
 LOG_RAW_TICKER_KEYS = True  # Toggle on to see actual Kalshi WS field names
 
@@ -64,10 +68,10 @@ MAX_SPREAD_PCT = 0.10  # 10% max spread to avoid getting crushed by slippage
 # Order Book Imbalance Threshold
 MIN_BOOK_IMBALANCE = 0.55  # Require 55% order book pressure in our direction (loosened from 60%)
 
-STOP_LOSS_PCT = -0.25             # Relaxed from -0.20 to -0.25 to prevent premature stop-outs
-PROFIT_PROTECTION_TRIGGER = 0.35  # Take profit at +35% gain (exit unless momentum favors holding)
+STOP_LOSS_PCT = -0.35             # Relaxed to -0.35 to prevent premature stop-outs
+PROFIT_PROTECTION_TRIGGER = 0.50  # Take profit at +50% gain (exit unless momentum favors holding)
 DISABLE_EARLY_EXITS = False       # Set to False to enable early stop-loss, salvage exits, and take-profit
-MIN_HOLD_TIME_SECONDS = 45        # Give mean-reversion trades 45 seconds to breathe before checking momentum
+MIN_HOLD_TIME_SECONDS = 90        # Give mean-reversion trades 90 seconds to breathe before checking momentum
 
 # Option Pricing Parameters
 MIN_EDGE = 0.02                   # Lowered from 0.05 to allow more trades
@@ -81,7 +85,7 @@ KALSHI_BASE_URL = "https://external-api.kalshi.com/trade-api/v2"
 # -------------------------------------------------------------------
 # Maximum distance from the contract threshold in basis points (1bp = 0.01%)
 # Skip entry if abs(spot - threshold) / spot * 10000 > this value
-MAX_DISTANCE_BPS = 12
+MAX_DISTANCE_BPS = 20
 
 # Momentum lookback window in minutes (how far back to measure price momentum)
 MOMENTUM_LOOKBACK_MINUTES = 3

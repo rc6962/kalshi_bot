@@ -16,7 +16,7 @@ def load_env():
 
 async def main():
     load_env()
-    api_key = os.getenv("KALSHI_API_KEY", "d8007edd-1341-4d12-b2ad-fed79d2e2af9")
+    api_key = os.getenv("KALSHI_API_KEY")
     private_key_path = os.getenv("KALSHI_PRIVATE_KEY_PATH", "kalshi_private_key.pem")
     
     print("=== Kalshi Position Diagnostics ===")

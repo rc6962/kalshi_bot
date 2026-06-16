@@ -9,6 +9,7 @@ class PositionManager:
         self.best_price = None
         self.contracts = 0
         self.side = None
+        self.peak_pnl = 0.0
         self.entry_time = None
 
     def open(self, price=None, contracts=0, side=None):
@@ -17,11 +18,13 @@ class PositionManager:
         self.contracts = contracts
         self.side = side
         self.entry_time = time.time()
+        self.peak_pnl = 0.0
 
     def close(self):
         self.entry_price = None
         self.best_price = None
         self.contracts = 0
+        self.peak_pnl = 0.0
         self.side = None
         self.entry_time = None
 
@@ -43,6 +46,8 @@ class PositionManager:
             self.best_price = current_price
 
         pnl = self._pnl(current_price)
+        if pnl > self.peak_pnl:
+            self.peak_pnl = pnl
         elapsed = time.time() - self.entry_time if self.entry_time else 0
         print(f"[PositionManager] pnl={pnl:.4%} elapsed={elapsed:.1f}s entry={self.entry_price:.4f} current={current_price:.4f} trend={futures_trend} time_rem={time_remaining} move_pct={move_pct:.6f} side={self.side}")
 
@@ -76,17 +81,7 @@ class PositionManager:
                     print(f"[PositionManager] EXIT: momentum reversal (pnl={pnl:.4%}, trend={futures_trend})")
                     return "EXIT"
 
-        # 3. Salvage: any loss in final minute
-        if time_remaining is not None and time_remaining <= 60:
-            if pnl < 0:
-                print(f"[PositionManager] EXIT: final salvage (pnl={pnl:.4%}, time_rem={time_remaining})")
-                return "EXIT"
 
-        # 4. Medium loss salvage: down >2% with under 2 minutes
-        if time_remaining is not None and time_remaining <= 120:
-            if pnl < -0.02:
-                print(f"[PositionManager] EXIT: medium salvage (pnl={pnl:.4%}, time_rem={time_remaining})")
-                return "EXIT"
 
         # 5. Time-decay profit take: >10% profit with under 3 minutes
         if time_remaining is not None and time_remaining <= 180:
@@ -102,12 +97,17 @@ class PositionManager:
             elif self.side == "no" and futures_trend is not None:
                 momentum_favorable = futures_trend < 0
 
-            if not momentum_favorable:
-                print(f"[PositionManager] EXIT: profit protection (pnl={pnl:.4%})")
+            # New condition: only exit if trend is unfavorable AND time remaining is less than 180 seconds
+            if not momentum_favorable and time_remaining is not None and time_remaining < 180:
+                print(f"[PositionManager] EXIT: profit protection (pnl={pnl:.4%}, time_rem={time_remaining})")
                 return "EXIT"
             else:
-                print(f"[PositionManager] HOLD: profit >= threshold but momentum favorable")
+                print(f"[PositionManager] HOLD: profit protection (pnl={pnl:.4%}) allowing winner to run")
                 return None
+        # Trailing stop: exit if pnl drops 15% from peak after profit protection
+        if self.peak_pnl > 0 and (self.peak_pnl - pnl) >= 0.15 * self.peak_pnl:
+            print(f"[PositionManager] EXIT: trailing stop (peak={self.peak_pnl:.4%}, pnl={pnl:.4%})")
+            return "EXIT"
 
         print(f"[PositionManager] HOLD: no exit condition met")
         return None
