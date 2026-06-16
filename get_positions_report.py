@@ -65,6 +65,7 @@ async def main():
         except Exception:
             entry_price = 0.0
             
+        qty = abs(int(float(pos.get("position") or pos.get("count") or pos.get("contracts") or 0)))
         cost = entry_price * qty
         total_cost += cost
         
@@ -80,18 +81,29 @@ async def main():
                 no_bid = market.get("no_bid") or market.get("no_bid_dollars")
                 
                 if yes_bid is not None:
-                    yes_bid = float(yes_bid)
-                    if yes_bid > 1.0:
-                        yes_bid /= 100.0
+                    try:
+                        yes_bid = float(yes_bid)
+                        if yes_bid > 1.0:
+                            yes_bid /= 100.0
+                    except Exception:
+                        yes_bid = 0.0
+                else:
+                    yes_bid = 0.0
+                    
                 if no_bid is not None:
-                    no_bid = float(no_bid)
-                    if no_bid > 1.0:
-                        no_bid /= 100.0
+                    try:
+                        no_bid = float(no_bid)
+                        if no_bid > 1.0:
+                            no_bid /= 100.0
+                    except Exception:
+                        no_bid = 0.0
+                else:
+                    no_bid = 0.0
                 
                 if side == "yes":
-                    current_bid = yes_bid or 0.0
+                    current_bid = yes_bid if yes_bid is not None else 0.0
                 else:
-                    current_bid = no_bid or 0.0
+                    current_bid = no_bid if no_bid is not None else 0.0
             except Exception as err:
                 print(f"  Warning: Failed to fetch market data for {ticker}: {err}")
                 current_bid = entry_price # fallback to entry
@@ -107,15 +119,34 @@ async def main():
         pnl_usd = cur_val - cost
         pnl_pct = (pnl_usd / cost * 100.0) if cost > 0 else 0.0
         
+        # Safe variables for string formatting
+        ticker_str = str(ticker) if ticker is not None else "Unknown"
+        side_str = str(side).upper() if side is not None else "YES"
+        qty_val = int(qty) if qty is not None else 0
+        entry_val = float(entry_price) if entry_price is not None else 0.0
+        cost_val = float(cost) if cost is not None else 0.0
+        bid_val = float(current_bid) if current_bid is not None else 0.0
+        cur_val_val = float(cur_val) if cur_val is not None else 0.0
+        pnl_usd_val = float(pnl_usd) if pnl_usd is not None else 0.0
+        pnl_pct_val = float(pnl_pct) if pnl_pct is not None else 0.0
+        payout_val = float(payout) if payout is not None else 0.0
+
         report_lines.append(
-            f"{ticker:<30} | {side.upper():<4} | {qty:<4} | ${entry_price:<5.2f} | ${cost:<6.2f} | ${current_bid:<5.2f} | ${cur_val:<6.2f} | ${pnl_usd:<7.2f} | {pnl_pct:>7.1f}% | ${payout:<9.2f}"
+            f"{ticker_str:<30} | {side_str:<4} | {qty_val:<4} | ${entry_val:<5.2f} | ${cost_val:<6.2f} | ${bid_val:<5.2f} | ${cur_val_val:<6.2f} | ${pnl_usd_val:<7.2f} | {pnl_pct_val:>7.1f}% | ${payout_val:<9.2f}"
         )
         
     report_lines.append("=" * 110)
     total_pnl = total_value - total_cost
     total_pnl_pct = (total_pnl / total_cost * 100.0) if total_cost > 0 else 0.0
+    
+    total_cost_val = float(total_cost) if total_cost is not None else 0.0
+    total_value_val = float(total_value) if total_value is not None else 0.0
+    total_pnl_val = float(total_pnl) if total_pnl is not None else 0.0
+    total_pnl_pct_val = float(total_pnl_pct) if total_pnl_pct is not None else 0.0
+    total_payout_val = float(total_payout) if total_payout is not None else 0.0
+
     report_lines.append(
-        f"{'TOTALS':<30} | {'':<4} | {'':<4} | {'':<6} | ${total_cost:<6.2f} | {'':<6} | ${total_value:<6.2f} | ${total_pnl:<7.2f} | {total_pnl_pct:>7.1f}% | ${total_payout:<9.2f}"
+        f"{'TOTALS':<30} | {'':<4} | {'':<4} | {'':<6} | ${total_cost_val:<6.2f} | {'':<6} | ${total_value_val:<6.2f} | ${total_pnl_val:<7.2f} | {total_pnl_pct_val:>7.1f}% | ${total_payout_val:<9.2f}"
     )
     report_lines.append("=" * 110)
     
