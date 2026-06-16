@@ -9,6 +9,7 @@ import numpy as np
 from datetime import datetime, timezone
 from config import *
 from engine.latency_optimizer import MicroOptimizations
+from engine.regime_detector import RegimeDetector
 from engine.entry_filter import (
     EntryFilter, ContractStateTracker,
     parse_asset_from_ticker, resolve_contract_threshold,
@@ -34,6 +35,9 @@ class SignalEngine:
         self._entry_filter = EntryFilter()
         # Rolling spot price history for momentum: list of (unix_ts, price)
         self._spot_history: list[tuple[float, float]] = []
+        # Regime detector for volatility/trend classification
+        self.regime = RegimeDetector()
+        self.current_regime = "RANGE"
 
     def _load_ml_model(self):
         """Load LightGBM model in native format. Auto-trains if model is missing but training data exists."""
@@ -271,6 +275,21 @@ class SignalEngine:
             cutoff = now_ts - 10 * 60
             self._spot_history = [(t, p) for t, p in self._spot_history if t >= cutoff]
 
+            # --- Regime detection ---
+            regime_info = self.regime.update(self._spot_history)
+            regime = regime_info["regime"]
+            vol_ratio = regime_info["vol_ratio"]
+            self.current_regime = regime
+            print(f"[Regime] {asset_name}: regime={regime}, vol_ratio={vol_ratio:.2f}, trend={regime_info['trend_strength']:.6f}")
+
+            # SHOCK: block all new entries
+            if regime == "SHOCK":
+                self._log_rejection(asset_name, None, None, None, 0.0, multiplier,
+                                    time_remaining, recent_move_pct, futures_trend,
+                                    bid, ask, bid_size, ask_size, spot_price, strike,
+                                    f"regime_shock:vol_ratio={vol_ratio:.2f}")
+                return (None, None)
+
             momentum_bps = compute_momentum_bps(
                 self._spot_history,
                 lookback_seconds=MOMENTUM_LOOKBACK_MINUTES * 60
@@ -396,11 +415,24 @@ class SignalEngine:
             return (None, None)
 
         # 4. Determine raw signal
+        # Apply regime-specific threshold adjustments
+        effective_threshold = params["IMPULSE_THRESHOLD_PCT"]
+        if self.current_regime == "HIGH_VOL":
+            effective_threshold = effective_threshold * 1.5
+
         raw_signal = None
-        if recent_move_pct < -params["IMPULSE_THRESHOLD_PCT"]:
-            raw_signal = "ENTER_YES"
-        elif recent_move_pct > params["IMPULSE_THRESHOLD_PCT"]:
-            raw_signal = "ENTER_NO"
+        if self.current_regime == "TREND":
+            # TREND regime: use continuation logic (follow the trend, don't fade it)
+            if recent_move_pct < -effective_threshold:
+                raw_signal = "ENTER_NO"   # Price falling → continue selling
+            elif recent_move_pct > effective_threshold:
+                raw_signal = "ENTER_YES"  # Price rising → continue buying
+        else:
+            # RANGE / HIGH_VOL: use mean reversion (default)
+            if recent_move_pct < -effective_threshold:
+                raw_signal = "ENTER_YES"
+            elif recent_move_pct > effective_threshold:
+                raw_signal = "ENTER_NO"
 
         if raw_signal is None:
             self._log_rejection(asset_name, None, None, spread_pct, strike_distance_pct, multiplier,

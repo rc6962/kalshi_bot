@@ -34,7 +34,7 @@ class PositionManager:
 
         return (current_price - self.entry_price) / self.entry_price
 
-    def update(self, current_price, futures_trend=None, time_remaining=None, move_pct=0):
+    def update(self, current_price, futures_trend=None, time_remaining=None, move_pct=0, regime=None):
         if self.entry_price is None:
             self.entry_price = current_price
             self.best_price = current_price
@@ -49,7 +49,7 @@ class PositionManager:
         if pnl > self.peak_pnl:
             self.peak_pnl = pnl
         elapsed = time.time() - self.entry_time if self.entry_time else 0
-        print(f"[PositionManager] pnl={pnl:.4%} peak={self.peak_pnl:.4%} elapsed={elapsed:.1f}s entry={self.entry_price:.4f} current={current_price:.4f} trend={futures_trend} time_rem={time_remaining} side={self.side}")
+        print(f"[PositionManager] pnl={pnl:.4%} peak={self.peak_pnl:.4%} elapsed={elapsed:.1f}s entry={self.entry_price:.4f} current={current_price:.4f} trend={futures_trend} time_rem={time_remaining} side={self.side} regime={regime}")
 
         # If early exits are disabled, bypass all exit checks and hold to expiry
         from config import DISABLE_EARLY_EXITS
@@ -57,10 +57,22 @@ class PositionManager:
             print(f"[PositionManager] HOLD: early exits disabled; letting position settle at expiry")
             return None
 
+        # --- Regime-adjusted stop loss ---
+        if regime == "HIGH_VOL":
+            # Widen stop slightly during high volatility, clamped at -0.45
+            dynamic_stop = max(-0.45, STOP_LOSS_PCT * 1.15)
+        else:
+            dynamic_stop = STOP_LOSS_PCT
+
         # --- 1. Hard stop loss — uniform for all contracts ---
-        if pnl <= STOP_LOSS_PCT:
-            print(f"[PositionManager] EXIT: hard stop loss ({pnl:.4%} <= {STOP_LOSS_PCT:.4%})")
+        if pnl <= dynamic_stop:
+            print(f"[PositionManager] EXIT: hard stop loss ({pnl:.4%} <= {dynamic_stop:.4%}, regime={regime})")
             return "EXIT"
+
+        # --- SHOCK regime: only hard stop fires, let binary settle ---
+        if regime == "SHOCK":
+            print(f"[PositionManager] HOLD: SHOCK regime — only hard stop active, letting binary settle")
+            return None
 
         # --- 2. Minimum hold time gate — no further exits before this ---
         if elapsed < MIN_HOLD_TIME_SECONDS:
@@ -109,3 +121,4 @@ class PositionManager:
 
         print(f"[PositionManager] HOLD: no exit condition met")
         return None
+

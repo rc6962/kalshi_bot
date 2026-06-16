@@ -743,6 +743,9 @@ class EventLoop:
             if win_prob is None:
                 win_prob = 0.55
 
+            # Read current regime from signal engine
+            regime = getattr(self.signal, 'current_regime', 'RANGE')
+
             if signal:
                 print(f"[{self.asset}] Signal: {signal}, win_prob={win_prob:.3f}, Yes/No: {yes_price}/{no_price}, Spot: {spot}, Strike: {self.strike}")
 
@@ -767,7 +770,8 @@ class EventLoop:
                     asset_name=self.asset,
                     multiplier=multiplier,
                     recent_pnl_pct=self.risk.get_recent_performance(),
-                    win_prob=win_prob
+                    win_prob=win_prob,
+                    regime=regime
                 )
                 
                 # Make sure we have at least 1 contract if the algorithm allows it
@@ -832,7 +836,8 @@ class EventLoop:
             current_price = yes_price if self.position.side == "yes" else no_price
             if current_price is not None:
                 futures_trend = self.futures.get_trend_direction()
-                exit_signal = self.position.update(current_price, futures_trend, time_remaining, move_pct)
+                regime = getattr(self.signal, 'current_regime', 'RANGE')
+                exit_signal = self.position.update(current_price, futures_trend, time_remaining, move_pct, regime=regime)
 
                 if exit_signal == "EXIT":
                     # Capture position fields NOW — before position.close() resets them to None

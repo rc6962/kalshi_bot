@@ -95,7 +95,7 @@ class RiskManager:
         
         return multiplier
         
-    def calculate_contracts(self, price, asset_name, multiplier=None, recent_pnl_pct=None, win_prob=None):
+    def calculate_contracts(self, price, asset_name, multiplier=None, recent_pnl_pct=None, win_prob=None, regime=None):
         """
         Calculate position size using Kelly Criterion for optimal growth.
         
@@ -105,6 +105,7 @@ class RiskManager:
             multiplier: Option multiplier (higher = more leverage)
             recent_pnl_pct: Recent performance adjustment
             win_prob: Probability of winning from ML/EV/rule-based estimator (None = use historical)
+            regime: Current market regime (RANGE, TREND, HIGH_VOL, SHOCK)
         
         Returns:
             Number of contracts to trade
@@ -118,6 +119,12 @@ class RiskManager:
             effective_win_prob = win_prob
         else:
             effective_win_prob = max(0.55, win_rate) if win_rate > 0.5 else 0.55
+
+        # Regime-based win_prob adjustment
+        if regime == "HIGH_VOL":
+            effective_win_prob *= 0.97
+        elif regime == "RANGE":
+            effective_win_prob = min(0.65, effective_win_prob * 1.02)
         
         # Calculate optimal contracts using Kelly
         contracts = self.kelly_sizer.calculate_contracts(
@@ -140,7 +147,7 @@ class RiskManager:
         max_contracts_for_asset = self.calculate_max_contracts_for_asset(asset_name, price)
         contracts = min(contracts, max_contracts_for_asset)
         
-        print(f"[RiskManager] Asset: {asset_name}, Price: ${price:.2f}, Max contracts for exposure: {max_contracts_for_asset}, Final: {contracts}")
+        print(f"[RiskManager] Asset: {asset_name}, Price: ${price:.2f}, Max contracts for exposure: {max_contracts_for_asset}, Final: {contracts}, regime={regime}, win_prob={effective_win_prob:.3f}")
         print(f"[RiskManager] Current exposure for {asset_name}: ${self.get_asset_exposure(asset_name):.2f}, Proposed new exposure: ${(self.get_asset_exposure(asset_name) + price * contracts):.2f}")
         
         return contracts
