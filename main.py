@@ -1,21 +1,37 @@
 import os
 import sys
+from collections import deque
 
 # Automatically log all terminal output to a file so the assistant can monitor it
+# Bounded to the last ~10,000 print chunks (approx. 5-7 minutes of activity) to prevent log bloating.
 class TeeLogger:
+    _buffer = deque(maxlen=10000)
+    _write_count = 0
+    
     def __init__(self, filename, stream):
         self.stream = stream
-        self.log = open(filename, "a", encoding="utf-8")
+        self.filename = filename
     
     def write(self, message):
         self.stream.write(message)
         self.stream.flush()
-        self.log.write(message)
-        self.log.flush()
+        TeeLogger._buffer.append(message)
+        TeeLogger._write_count += 1
+        
+        if TeeLogger._write_count >= 50:
+            TeeLogger._write_count = 0
+            self.flush_to_file()
         
     def flush(self):
         self.stream.flush()
-        self.log.flush()
+        self.flush_to_file()
+
+    def flush_to_file(self):
+        try:
+            with open(self.filename, "w", encoding="utf-8") as f:
+                f.write("".join(TeeLogger._buffer))
+        except Exception:
+            pass
 
 sys.stdout = TeeLogger("bot.log", sys.stdout)
 sys.stderr = TeeLogger("bot.log", sys.stderr)
