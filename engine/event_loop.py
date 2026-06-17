@@ -637,6 +637,11 @@ class EventLoop:
             print(f"[{self.asset}] Market expired. Resetting memory position and state to IDLE for settlement.")
             self.position.close()
             self.state.exit()
+            
+            # Reset resting order flags for the next 15-minute market
+            self.stink_bids_placed = False
+            self.stink_bids_canceled = False
+            
             print(f"[{self.asset}] Ignoring expired market ticker:", self.current_ticker)
             return
 
@@ -800,11 +805,22 @@ class EventLoop:
                 if yes_bid is None: yes_bid = yes_price
                 if yes_ask is None: yes_ask = yes_price
                 
-                signal_result = self.signal.evaluate(
-                    asset_name=self.asset, bid=yes_bid, ask=yes_ask, bid_size=bid_size, ask_size=ask_size,
-                    strike=self.strike, spot_price=spot, multiplier=multiplier, time_remaining=time_remaining,
-                    recent_move_pct=move_pct, futures_trend=self.futures.get_trend_direction()
-                )
+                # --- SIGNAL DEBOUNCER ---
+                current_time = time.time()
+                last_sig_time = getattr(self, "last_signal_time", 0)
+                last_spot = getattr(self, "last_spot_price", 0)
+                
+                spot_moved_bps = abs((spot - last_spot) / last_spot * 10000) if last_spot > 0 else 100
+                if (current_time - last_sig_time < 5) and (spot_moved_bps < 5):
+                    signal_result = (None, None)
+                else:
+                    self.last_signal_time = current_time
+                    self.last_spot_price = spot
+                    signal_result = self.signal.evaluate(
+                        asset_name=self.asset, bid=yes_bid, ask=yes_ask, bid_size=bid_size, ask_size=ask_size,
+                        strike=self.strike, spot_price=spot, multiplier=multiplier, time_remaining=time_remaining,
+                        recent_move_pct=move_pct, futures_trend=self.futures.get_trend_direction()
+                    )
                 
                 if isinstance(signal_result, tuple):
                     signal, win_prob = signal_result

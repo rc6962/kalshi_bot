@@ -415,15 +415,25 @@ class SignalEngine:
         if self.current_regime == "HIGH_VOL":
             effective_threshold = effective_threshold * 1.5
 
+        from config import SIDE_LOGIC_MODE
         raw_signal = None
-        # Strict bounce-fading logic (mean reversion):
-        # We only fade strong moves.
-        if recent_move_pct > effective_threshold:
-            # Price pumps -> Buy NO to fade the bounce
-            raw_signal = "ENTER_NO"
-        elif recent_move_pct < -effective_threshold:
-            # Price dumps -> Buy YES to fade the bounce
-            raw_signal = "ENTER_YES"
+        
+        if SIDE_LOGIC_MODE == "continuation":
+            # Continuation logic (trade with the trend)
+            if recent_move_pct > effective_threshold:
+                # Price pumps -> Buy YES to ride the momentum
+                raw_signal = "ENTER_YES"
+            elif recent_move_pct < -effective_threshold:
+                # Price dumps -> Buy NO to ride the momentum
+                raw_signal = "ENTER_NO"
+        else:
+            # Mean reversion logic (fade the bounce)
+            if recent_move_pct > effective_threshold:
+                # Price pumps -> Buy NO to fade the bounce
+                raw_signal = "ENTER_NO"
+            elif recent_move_pct < -effective_threshold:
+                # Price dumps -> Buy YES to fade the bounce
+                raw_signal = "ENTER_YES"
 
         if raw_signal is None:
             self._log_rejection(asset_name, None, None, spread_pct, strike_distance_pct, multiplier,
@@ -432,14 +442,14 @@ class SignalEngine:
                                 f"move_below_threshold:{recent_move_pct:.6f}")
             return (None, None)
 
-        # STRICT BOUNCE PROFITABILITY FILTER (FOR BOTH YES AND NO)
+        # PROFITABILITY FILTER (FOR BOTH YES AND NO)
         if raw_signal in ("ENTER_YES", "ENTER_NO"):
-            # Only allow trades during a strong bounce using the dynamic threshold
+            # Only allow trades during a strong move using the dynamic threshold
             if abs(recent_move_pct) < effective_threshold:
                 self._log_rejection(asset_name, raw_signal, None, spread_pct, strike_distance_pct, multiplier,
                                     time_remaining, recent_move_pct, futures_trend,
                                     bid, ask, bid_size, ask_size, spot_price, strike,
-                                    f"{raw_signal}_requires_strong_bounce")
+                                    f"{raw_signal}_requires_strong_move")
                 return (None, None)
             
             # Calculate the true multiplier based on the actual contract cost
@@ -463,16 +473,14 @@ class SignalEngine:
         if ticker:
             approved_side = ef_result.get("approved_side")
             expected_raw_signal = "ENTER_YES" if approved_side == "yes" else "ENTER_NO"
-            # Bypass side mismatch since our strict bounce logic takes precedence
             if raw_signal != expected_raw_signal:
-                if not (abs(recent_move_pct) >= effective_threshold):
-                    self._log_rejection(
-                        asset_name, raw_signal, None, spread_pct, strike_distance_pct, multiplier,
-                        time_remaining, recent_move_pct, futures_trend,
-                        bid, ask, bid_size, ask_size, spot_price, strike,
-                        f"filter_side_mismatch:filter={approved_side}_signal={raw_signal}"
-                    )
-                    return (None, None)
+                self._log_rejection(
+                    asset_name, raw_signal, None, spread_pct, strike_distance_pct, multiplier,
+                    time_remaining, recent_move_pct, futures_trend,
+                    bid, ask, bid_size, ask_size, spot_price, strike,
+                    f"filter_side_mismatch:filter={approved_side}_signal={raw_signal}"
+                )
+                return (None, None)
         
         # 4.5 Target Side Spread Filter
         # Calculate spread relative to the actual side we are buying
@@ -556,7 +564,8 @@ class SignalEngine:
             )
 
         if USE_ML_VETO and ml_prob is not None and ml_prob < ML_CONFIDENCE_THRESHOLD:
-            reason = f"ml_low_confidence:{ml_prob:.4f}"
+            side_str = "YES" if raw_signal == "ENTER_YES" else "NO"
+            reason = f"ml_low_confidence_{side_str}:{ml_prob:.4f}"
             self._log_veto(raw_signal, ml_prob, multiplier, strike_distance_pct,
                            recent_move_pct, time_remaining, futures_trend, spread_pct, reason)
             self._log_rejection(asset_name, raw_signal, actual_cost, spread_pct, strike_distance_pct, multiplier,

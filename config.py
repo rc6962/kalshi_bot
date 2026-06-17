@@ -57,13 +57,13 @@ MIN_EV_EDGE = 0.05   # Require at least 5% positive EV edge per trade (if enable
 
 # ML Standalone Veto Filter
 USE_ML_VETO = True
-ML_CONFIDENCE_THRESHOLD = 0.53
+ML_CONFIDENCE_THRESHOLD = 0.50
 
 # Debug: log raw ticker data for first N ticks to diagnose field names
 LOG_RAW_TICKER_KEYS = True  # Toggle on to see actual Kalshi WS field names
 
 # Spread filter: skip entry if bid-ask spread exceeds this % of mid price
-MAX_SPREAD_PCT = 0.10  # 10% max spread to avoid getting crushed by slippage
+MAX_SPREAD_PCT = 0.04  # 4% max spread to avoid getting crushed by slippage
 
 # Order Book Imbalance Threshold
 MIN_BOOK_IMBALANCE = 0.55  # Require 55% order book pressure in our direction (loosened from 60%)
