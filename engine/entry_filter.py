@@ -173,6 +173,9 @@ def infer_side(spot: float, threshold: float, momentum_bps: float,
     if mode == "continuation":
         if spot > threshold and momentum_bps >= min_mom:
             return "yes"
+        # Asymmetric logic: allow NO trades during a strong bounce (mean reversion for NO)
+        if spot > threshold and momentum_bps >= min_mom * 2: # strong bounce
+            return "no"
         if spot < threshold and momentum_bps <= -min_mom:
             return "no"
     else:  # mean_reversion

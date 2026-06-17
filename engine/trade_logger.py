@@ -24,7 +24,7 @@ class TradeLogger:
                     "trade_id", "datetime", "asset", "window_start", "window_end",
                     "side", "entry_price", "exit_price", "contracts",
                     "profit_usd", "profit_pct", "outcome",
-                    "entry_time", "exit_time", "held_seconds",
+                    "entry_time", "exit_time", "held_seconds", "exit_reason",
                     "multiplier", "strike_distance_pct", "recent_move_pct",
                     "time_remaining_sec", "futures_trend", "spot_price", "strike_price"
                 ])
@@ -151,6 +151,7 @@ class TradeLogger:
                 trade.get("entry_time"),
                 trade.get("exit_time"),
                 trade.get("held_seconds"),
+                trade.get("exit_reason"),
                 # ML Features
                 trade.get("multiplier"),
                 trade.get("strike_distance_pct"),

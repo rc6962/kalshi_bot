@@ -373,11 +373,23 @@ async def main():
                     print(f"[Portfolio] Balance sync failed: {e}")
             await asyncio.sleep(5)
 
+    async def watchdog_loop():
+        while True:
+            if os.path.exists("restart_flag.txt"):
+                print("Restart flag detected. Exiting to allow auto-restart...")
+                try:
+                    os.remove("restart_flag.txt")
+                except Exception:
+                    pass
+                os._exit(1)
+            await asyncio.sleep(5)
+
     portfolio_task = asyncio.create_task(portfolio_sync_loop())
     rollover_task = asyncio.create_task(market_rollover_monitor())
     ws_runner_task = asyncio.create_task(shared_websocket_runner())
     eod_task = asyncio.create_task(eod_export_loop(trade_logger))
     latency_task = asyncio.create_task(latency_report_loop())
+    watchdog_task = asyncio.create_task(watchdog_loop())
     
     # Pass balance ref to all event loops for dynamic position sizing
     for loop_obj in loops:
@@ -410,6 +422,7 @@ async def main():
             eod_task, 
             portfolio_task,
             latency_task,
+            watchdog_task,
         )
     finally:
         # Clean up connections

@@ -370,15 +370,10 @@ class SignalEngine:
         })
 
         # 2. Spread Filter
+        # Initialize spread_pct for use in early rejections.
+        # We will calculate the actual spread later once the trade side is known.
         spread_pct = None
-        if bid is not None and ask is not None and bid > 0 and ask > 0:
-            spread_pct = MicroOptimizations.fast_spread_pct(bid, ask)
-            if spread_pct is not None and spread_pct > MAX_SPREAD_PCT:
-                self._log_rejection(asset_name, None, None, spread_pct, 0.0, multiplier,
-                                    time_remaining, recent_move_pct, futures_trend,
-                                    bid, ask, bid_size, ask_size, spot_price, strike,
-                                    f"spread_too_wide:{spread_pct:.2%}")
-                return (None, None)
+
 
         # 3. Strike Proximity Check
         strike_distance_pct = 0.0
@@ -421,18 +416,14 @@ class SignalEngine:
             effective_threshold = effective_threshold * 1.5
 
         raw_signal = None
-        if self.current_regime == "TREND":
-            # TREND regime: use continuation logic (follow the trend, don't fade it)
-            if recent_move_pct < -effective_threshold:
-                raw_signal = "ENTER_NO"   # Price falling → continue selling
-            elif recent_move_pct > effective_threshold:
-                raw_signal = "ENTER_YES"  # Price rising → continue buying
-        else:
-            # RANGE / HIGH_VOL: use mean reversion (default)
-            if recent_move_pct < -effective_threshold:
-                raw_signal = "ENTER_YES"
-            elif recent_move_pct > effective_threshold:
-                raw_signal = "ENTER_NO"
+        # Strict bounce-fading logic (mean reversion):
+        # We only fade strong moves.
+        if recent_move_pct > effective_threshold:
+            # Price pumps -> Buy NO to fade the bounce
+            raw_signal = "ENTER_NO"
+        elif recent_move_pct < -effective_threshold:
+            # Price dumps -> Buy YES to fade the bounce
+            raw_signal = "ENTER_YES"
 
         if raw_signal is None:
             self._log_rejection(asset_name, None, None, spread_pct, strike_distance_pct, multiplier,
@@ -440,6 +431,67 @@ class SignalEngine:
                                 bid, ask, bid_size, ask_size, spot_price, strike,
                                 f"move_below_threshold:{recent_move_pct:.6f}")
             return (None, None)
+
+        # STRICT BOUNCE PROFITABILITY FILTER (FOR BOTH YES AND NO)
+        if raw_signal in ("ENTER_YES", "ENTER_NO"):
+            # Only allow trades during a strong bounce using the dynamic threshold
+            if abs(recent_move_pct) < effective_threshold:
+                self._log_rejection(asset_name, raw_signal, None, spread_pct, strike_distance_pct, multiplier,
+                                    time_remaining, recent_move_pct, futures_trend,
+                                    bid, ask, bid_size, ask_size, spot_price, strike,
+                                    f"{raw_signal}_requires_strong_bounce")
+                return (None, None)
+            
+            # Calculate the true multiplier based on the actual contract cost
+            contract_cost = None
+            if raw_signal == "ENTER_YES":
+                contract_cost = ask  # Price to buy YES
+            else:
+                contract_cost = 1.0 - bid if bid is not None else (1.0 - ask if ask is not None else None) # Price to buy NO
+                
+            true_multiplier = 1.0 / contract_cost if contract_cost is not None and contract_cost > 0 else 0
+            
+            # Require a high multiplier to ensure it's a profitable setup
+            if true_multiplier < 2.0:
+                self._log_rejection(asset_name, raw_signal, None, spread_pct, strike_distance_pct, multiplier,
+                                    time_remaining, recent_move_pct, futures_trend,
+                                    bid, ask, bid_size, ask_size, spot_price, strike,
+                                    f"{raw_signal}_low_true_multiplier:{true_multiplier:.2f}")
+                return (None, None)
+
+        # Check if raw_signal matches the approved_side from EntryFilter
+        if ticker:
+            approved_side = ef_result.get("approved_side")
+            expected_raw_signal = "ENTER_YES" if approved_side == "yes" else "ENTER_NO"
+            # Bypass side mismatch since our strict bounce logic takes precedence
+            if raw_signal != expected_raw_signal:
+                if not (abs(recent_move_pct) >= effective_threshold):
+                    self._log_rejection(
+                        asset_name, raw_signal, None, spread_pct, strike_distance_pct, multiplier,
+                        time_remaining, recent_move_pct, futures_trend,
+                        bid, ask, bid_size, ask_size, spot_price, strike,
+                        f"filter_side_mismatch:filter={approved_side}_signal={raw_signal}"
+                    )
+                    return (None, None)
+        
+        # 4.5 Target Side Spread Filter
+        # Calculate spread relative to the actual side we are buying
+        target_bid = bid
+        target_ask = ask
+        
+        if raw_signal == "ENTER_NO":
+            if bid is not None and ask is not None:
+                target_bid = 1.0 - ask
+                target_ask = 1.0 - bid
+
+        if target_bid is not None and target_ask is not None and target_bid > 0 and target_ask > 0:
+            spread_pct = MicroOptimizations.fast_spread_pct(target_bid, target_ask)
+            if spread_pct is not None and spread_pct > MAX_SPREAD_PCT:
+                self._log_rejection(asset_name, raw_signal, None, spread_pct, strike_distance_pct, multiplier,
+                                    time_remaining, recent_move_pct, futures_trend,
+                                    bid, ask, bid_size, ask_size, spot_price, strike,
+                                    f"spread_too_wide:{spread_pct:.2%}")
+                return (None, None)
         
         # 5. Price filter: never pay more than $0.50 per contract
         #

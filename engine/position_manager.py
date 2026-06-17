@@ -40,7 +40,7 @@ class PositionManager:
             self.best_price = current_price
             self.entry_time = time.time()
             print(f"[PositionManager] No entry_price; set to {current_price:.4f}, returning None")
-            return None
+            return (None, None)
 
         if current_price > self.best_price:
             self.best_price = current_price
@@ -55,70 +55,64 @@ class PositionManager:
         from config import DISABLE_EARLY_EXITS
         if DISABLE_EARLY_EXITS:
             print(f"[PositionManager] HOLD: early exits disabled; letting position settle at expiry")
-            return None
+            return (None, None)
 
-        # --- Regime-adjusted stop loss ---
-        if regime == "HIGH_VOL":
-            # Widen stop slightly during high volatility, clamped at -0.45
-            dynamic_stop = max(-0.45, STOP_LOSS_PCT * 1.15)
+        # --- LATE WINDOW LOGIC (Takes precedence) ---
+        if time_remaining is not None:
+            # 1. Winning in the last 3 minutes -> Let it settle!
+            if time_remaining <= 180 and pnl > 0:
+                print(f"[PositionManager] HOLD: winning in last 3 mins, letting it settle (pnl={pnl:.4%})")
+                return (None, None)
+            
+            # 2. Losing in the last 1 minute -> Close it out for whatever we can salvage
+            # ONLY if there is "no chance" (down 80%+ with trend against us, or price <= $0.05)
+            if time_remaining <= 60 and pnl < 0:
+                trend_against = False
+                if futures_trend is not None:
+                    trend_against = (
+                        (self.side == "yes" and futures_trend < 0) or
+                        (self.side == "no" and futures_trend > 0)
+                    )
+                if (pnl < -0.80 and trend_against) or current_price <= 0.05:
+                    print(f"[PositionManager] EXIT: losing in last 1 min with no chance (pnl={pnl:.4%}, price={current_price:.4f})")
+                    return ("EXIT", "salvage_loss")
+
+        # --- Dynamic Stop Loss ---
+        # User requested: Give it breathing room (-85%) until the final minute, 
+        # then tighten it to the standard stop loss.
+        if time_remaining is not None and time_remaining > 60:
+            dynamic_stop = -0.85
         else:
             dynamic_stop = STOP_LOSS_PCT
 
-        # --- 1. Hard stop loss — uniform for all contracts ---
+        # --- Catastrophic stop - bypasses minimum hold time ---
+        if pnl <= -0.95:
+            print(f"[PositionManager] EXIT: catastrophic stop loss (pnl={pnl:.4%})")
+            return ("EXIT", "catastrophic_stop")
+
+        # --- Hard stop loss — uniform for all contracts ---
         if pnl <= dynamic_stop:
             print(f"[PositionManager] EXIT: hard stop loss ({pnl:.4%} <= {dynamic_stop:.4%}, regime={regime})")
-            return "EXIT"
+            return ("EXIT", "hard_stop_loss")
+
+        # --- Minimum hold time gate — no further exits before this ---
+        if elapsed < MIN_HOLD_TIME_SECONDS:
+            print(f"[PositionManager] HOLD: min hold time ({elapsed:.0f}s < {MIN_HOLD_TIME_SECONDS}s)")
+            return (None, None)
 
         # --- SHOCK regime: only hard stop fires, let binary settle ---
         if regime == "SHOCK":
             print(f"[PositionManager] HOLD: SHOCK regime — only hard stop active, letting binary settle")
-            return None
+            return (None, None)
 
-        # --- 2. Minimum hold time gate — no further exits before this ---
-        if elapsed < MIN_HOLD_TIME_SECONDS:
-            print(f"[PositionManager] HOLD: min hold time ({elapsed:.0f}s < {MIN_HOLD_TIME_SECONDS}s)")
-            return None
-
-        # --- 3. Late-window resolution logic (time_remaining <= 45s) ---
-        # Near expiry: only exit on catastrophic loss with adverse trend.
-        # Binary contracts resolve at expiry — let them settle.
-        if time_remaining is not None and time_remaining <= 45:
-            trend_against = False
-            if futures_trend is not None:
-                trend_against = (
-                    (self.side == "yes" and futures_trend < 0) or
-                    (self.side == "no" and futures_trend > 0)
-                )
-            if pnl < -0.30 and trend_against:
-                print(f"[PositionManager] EXIT: late-window catastrophic (pnl={pnl:.4%}, trend={futures_trend}, time_rem={time_remaining})")
-                return "EXIT"
-            print(f"[PositionManager] HOLD: late-window — letting binary settle at expiry (pnl={pnl:.4%}, time_rem={time_remaining})")
-            return None
-
-        # --- 4. Trailing convex profit model ---
-        # After reaching 40%+ peak gain, protect by exiting on 15% absolute retrace
-        if self.peak_pnl >= 0.40:
+        # --- Trailing Profit Model ---
+        # After reaching 75%+ peak gain, trail tightly with a 15% absolute retrace
+        # Note: If time_remaining <= 180 and winning, it returns early above. So this only fires >3mins left.
+        if self.peak_pnl >= 0.75:
             if pnl <= self.peak_pnl - 0.15:
                 print(f"[PositionManager] EXIT: convex trailing (peak={self.peak_pnl:.4%}, pnl={pnl:.4%}, retrace={self.peak_pnl - pnl:.4%})")
-                return "EXIT"
-
-        # --- 5. Profit protection (50%+ gain) ---
-        # Only exit if momentum turns against AND under 3 minutes remain.
-        # Otherwise let the winner run toward full binary payout.
-        if pnl >= PROFIT_PROTECTION_TRIGGER:
-            momentum_favorable = False
-            if self.side == "yes" and futures_trend is not None:
-                momentum_favorable = futures_trend > 0
-            elif self.side == "no" and futures_trend is not None:
-                momentum_favorable = futures_trend < 0
-
-            if not momentum_favorable and time_remaining is not None and time_remaining < 180:
-                print(f"[PositionManager] EXIT: profit protection (pnl={pnl:.4%}, time_rem={time_remaining}, trend={futures_trend})")
-                return "EXIT"
-            else:
-                print(f"[PositionManager] HOLD: profit {pnl:.4%} — allowing winner to run (trend_favorable={momentum_favorable})")
-                return None
+                return ("EXIT", "trailing_stop")
 
         print(f"[PositionManager] HOLD: no exit condition met")
-        return None
+        return (None, None)
 

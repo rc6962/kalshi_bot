@@ -113,10 +113,12 @@ class EventLoop:
                         self.position.entry_price = entry_price
                         self.position.side = pos.get("side")
                         
-                        # Calculate and set exposure for this position
                         if self.position.entry_price and self.position.contracts:
                             position_value = self.position.entry_price * self.position.contracts
                             self.risk.set_asset_exposure(self.asset, position_value)
+                        
+                        self._entry_timestamp = time.time()
+                        self._entry_time_iso = datetime.utcnow().isoformat()
                         
                         print(f"[{self.asset}] Loaded existing position: {self.position.contracts} contracts at ${self.position.entry_price:.2f}, exposure: ${self.risk.get_asset_exposure(self.asset):.2f}")
                         break
@@ -238,6 +240,9 @@ class EventLoop:
             if entry_price and contracts:
                 position_value = entry_price * contracts
                 self.risk.set_asset_exposure(self.asset, position_value)
+            
+            self._entry_timestamp = time.time()
+            self._entry_time_iso = datetime.utcnow().isoformat()
             
             print(f"[{self.asset}] Synced portfolio position:", ticker, side, contracts, f"entry_price=${entry_price:.2f}", f"exposure=${self.risk.get_asset_exposure(self.asset):.2f}")
             return
@@ -688,250 +693,231 @@ class EventLoop:
         time_remaining = self.expiry - int(time.time())
         print(f"[{self.asset}] move_pct={move_pct}, time_remaining={time_remaining}, state={self.state.state}")
 
-        # ENTRY LOGIC
+        # HYBRID LOGIC: Maker (Stink Bids) + Taker (Sniper)
         if self.state.can_enter():
-            if self._order_in_flight:
-                return
-
-            # Extract bid_size and ask_size from ticker data
-            bid_size = ticker_data.get("yes_bid_size") or ticker_data.get("bid_size") or 0
-            ask_size = ticker_data.get("yes_ask_size") or ticker_data.get("ask_size") or 0
-
-            # Safely calculate multiplier with error handling
-            try:
-                multiplier = self.risk.calculate_multiplier(spot, self.strike)
-            except Exception as mult_err:
-                print(f"[{self.asset}] Multiplier calculation failed: {mult_err}, using default 1.0")
-                multiplier = 1.0
-
-            # Extract bid and ask separately for the spread filter to work correctly
-            yes_bid = MicroOptimizations.fast_normalize_price(
-                ticker_data.get("yes_bid") or ticker_data.get("yes_bid_dollars")
-            )
-            yes_ask = MicroOptimizations.fast_normalize_price(
-                ticker_data.get("yes_ask") or ticker_data.get("yes_ask_dollars")
-            )
-            # Fall back to mid-price if one side is missing
-            if yes_bid is None:
-                yes_bid = yes_price
-            if yes_ask is None:
-                yes_ask = yes_price
-            
-            print(f"[{self.asset}] Calling signal.evaluate with spot={spot}, strike={self.strike}, multiplier={multiplier}")
-            signal_result = self.signal.evaluate(
-                asset_name=self.asset,
-                bid=yes_bid,
-                ask=yes_ask,
-                bid_size=bid_size,
-                ask_size=ask_size,
-                strike=self.strike,
-                spot_price=spot,
-                multiplier=multiplier,
-                time_remaining=time_remaining,
-                recent_move_pct=move_pct,
-                futures_trend=self.futures.get_trend_direction()
-            )
-            
-            # Unpack (signal, win_prob) tuple from SignalEngine
-            if isinstance(signal_result, tuple):
-                signal, win_prob = signal_result
-            else:
-                signal = signal_result
-                win_prob = None
-            
-            # Fallback: if no win_prob returned, use conservative default
-            if win_prob is None:
-                win_prob = 0.55
-
-            # Read current regime from signal engine
-            regime = getattr(self.signal, 'current_regime', 'RANGE')
-
-            if signal:
-                print(f"[{self.asset}] Signal: {signal}, win_prob={win_prob:.3f}, Yes/No: {yes_price}/{no_price}, Spot: {spot}, Strike: {self.strike}")
-
-                # Place order based on signal
-                side = "yes" if signal == "ENTER_YES" else "no"
-                if side == "yes":
-                    base_price = yes_ask if yes_ask is not None else yes_price
-                else:
-                    no_ask = MicroOptimizations.fast_normalize_price(
-                        ticker_data.get("no_ask") or ticker_data.get("no_ask_dollars")
+            # ==========================================
+            # 1. MAKER LOGIC: Stink Bids
+            # ==========================================
+            if not getattr(self, 'stink_bids_placed', False):
+                self.stink_bids_placed = True
+                self.resting_order_ids = {"yes": None, "no": None}
+                self.resting_sell_orders = {"yes": None, "no": None}
+                
+                try:
+                    print(f"[{self.asset}] Placing resting stink bids at $0.15 for {self.current_ticker}")
+                    
+                    yes_client_id = f"stink_yes_{self.asset}_{int(time.time())}"
+                    resp_yes = await self.kalshi.place_limit_order(
+                        ticker=self.current_ticker, side="yes", contracts=2, price=0.15, client_order_id=yes_client_id
                     )
-                    if no_ask is None and yes_bid is not None:
-                        no_ask = 1.0 - yes_bid
-                    base_price = no_ask if no_ask is not None else no_price
+                    if isinstance(resp_yes, dict) and "order" in resp_yes:
+                        self.resting_order_ids["yes"] = resp_yes["order"].get("order_id")
+                        
+                    no_client_id = f"stink_no_{self.asset}_{int(time.time())}"
+                    resp_no = await self.kalshi.place_limit_order(
+                        ticker=self.current_ticker, side="no", contracts=2, price=0.15, client_order_id=no_client_id
+                    )
+                    if isinstance(resp_no, dict) and "order" in resp_no:
+                        self.resting_order_ids["no"] = resp_no["order"].get("order_id")
+                except Exception as e:
+                    print(f"[{self.asset}] Failed to place stink bids: {e}")
+                    if "insufficient balance" in str(e).lower() or "timeout" in str(e).lower():
+                        self.stink_bids_placed = True
+                    else:
+                        self.stink_bids_placed = False # Retry next tick
+
+            # 2. Check Auto-Cancel condition (2 minutes to expiry)
+            if time_remaining < 120 and getattr(self, 'stink_bids_placed', False) and not getattr(self, 'stink_bids_canceled', False):
+                print(f"[{self.asset}] Time remaining < 120s. Canceling resting stink bids.")
+                self.stink_bids_canceled = True
+                for side, oid in getattr(self, 'resting_order_ids', {}).items():
+                    if oid:
+                        try:
+                            await self.kalshi.cancel_order(oid)
+                        except Exception as e:
+                            print(f"[{self.asset}] Failed to cancel {side} order {oid}: {e}")
+                self.resting_order_ids = {"yes": None, "no": None}
+
+            # ==========================================
+            # 3. TWAP ARBITRAGE (Final Minute)
+            # ==========================================
+            if not getattr(self, '_order_in_flight', False) and 5 < time_remaining <= 60:
+                elapsed_seconds, running_avg = self.futures.get_final_minute_twap(self.expiry)
+                if elapsed_seconds > 15 and running_avg is not None:
+                    # Calculate required average for the remaining seconds to flip the outcome
+                    remaining_seconds = 60 - elapsed_seconds
+                    if remaining_seconds > 0:
+                        required_sum = self.strike * 60
+                        current_sum = running_avg * elapsed_seconds
+                        required_avg_remaining = (required_sum - current_sum) / remaining_seconds
+                        
+                        # Distance required vs current spot
+                        spot_diff_pct = abs(required_avg_remaining - spot) / spot
+                        
+                        # Mathematical Lock Threshold (1.0% required swing in seconds)
+                        if spot_diff_pct > 0.010: 
+                            twap_side = "yes" if running_avg > self.strike else "no"
+                            
+                            yes_ask = MicroOptimizations.fast_normalize_price(ticker_data.get("yes_ask") or ticker_data.get("yes_ask_dollars"))
+                            no_ask = MicroOptimizations.fast_normalize_price(ticker_data.get("no_ask") or ticker_data.get("no_ask_dollars"))
+                            if yes_ask is None: yes_ask = yes_price
+                            if no_ask is None and ticker_data.get("yes_bid"): no_ask = 1.0 - MicroOptimizations.fast_normalize_price(ticker_data.get("yes_bid"))
+                            
+                            twap_ask = yes_ask if twap_side == "yes" else no_ask
+                            
+                            if twap_ask is not None and twap_ask <= 0.85:
+                                try:
+                                    self._order_in_flight = True
+                                    print(f"[{self.asset}] TWAP ARBITRAGE LOCK! {twap_side.upper()} guaranteed. Avg: {running_avg:.2f}, Required: {required_avg_remaining:.2f}")
+                                    order_result = await self.kalshi.place_market_order(
+                                        ticker=self.current_ticker, side=twap_side, contracts=2, price=twap_ask
+                                    )
+                                    
+                                    # We don't bother strictly validating fill here; if it filled, we own it
+                                    self.position.open(twap_ask, 2, twap_side)
+                                    self.position.hold_to_expiry = True # Do not take profit
+                                    self.state.enter("TWAP_ARB")
+                                    print(f"\033[92m[{self.asset}] ✅ TWAP ARB EXECUTED: 2 contracts at ${twap_ask:.2f} - HOLDING TO EXPIRY\033[0m")
+                                except Exception as e:
+                                    print(f"[{self.asset}] TWAP Arb failed: {e}")
+                                finally:
+                                    self._order_in_flight = False
+
+            # ==========================================
+            # 4. TAKER LOGIC: Directional Sniper
+            # ==========================================
+            if not getattr(self, '_order_in_flight', False):
+                bid_size = ticker_data.get("yes_bid_size") or ticker_data.get("bid_size") or 0
+                ask_size = ticker_data.get("yes_ask_size") or ticker_data.get("ask_size") or 0
+
+                try:
+                    multiplier = self.risk.calculate_multiplier(spot, self.strike)
+                except Exception:
+                    multiplier = 1.0
+
+                yes_bid = MicroOptimizations.fast_normalize_price(ticker_data.get("yes_bid") or ticker_data.get("yes_bid_dollars"))
+                yes_ask = MicroOptimizations.fast_normalize_price(ticker_data.get("yes_ask") or ticker_data.get("yes_ask_dollars"))
+                if yes_bid is None: yes_bid = yes_price
+                if yes_ask is None: yes_ask = yes_price
                 
-                # Add 1 cent slippage buffer, capped at the $0.50 maximum allowed price
-                price = min(0.50, base_price + 0.01) if base_price is not None else 0.01
-                
-                # Calculate number of contracts respecting the $5 limit per asset
-                contracts = self.risk.calculate_contracts(
-                    price=price,
-                    asset_name=self.asset,
-                    multiplier=multiplier,
-                    recent_pnl_pct=self.risk.get_recent_performance(),
-                    win_prob=win_prob,
-                    regime=regime
+                signal_result = self.signal.evaluate(
+                    asset_name=self.asset, bid=yes_bid, ask=yes_ask, bid_size=bid_size, ask_size=ask_size,
+                    strike=self.strike, spot_price=spot, multiplier=multiplier, time_remaining=time_remaining,
+                    recent_move_pct=move_pct, futures_trend=self.futures.get_trend_direction()
                 )
                 
-                # Make sure we have at least 1 contract if the algorithm allows it
-                if contracts > 0:
-                    try:
-                        self._order_in_flight = True
-                        order_result = await self.kalshi.place_market_order(
-                            ticker=self.current_ticker,
-                            side=side,
-                            contracts=contracts,
-                            price=price  # Price in dollars, will be converted to cents internally
-                        )
-                        
-                        # Extract actual filled contracts from order response
-                        order_details = {}
-                        if isinstance(order_result, dict):
-                            order_details = order_result.get("order") or order_result
-                        
-                        raw_fill = (
-                            order_details.get("fill_count")
-                            or order_details.get("fill_count_fp")
-                            or order_details.get("filled_count")
-                            or order_details.get("filled_contracts")
-                        )
-                        filled_contracts = 0
-                        if raw_fill is not None:
-                            try:
-                                filled_contracts = int(float(raw_fill))
-                            except Exception:
-                                filled_contracts = 0
-                        else:
-                            # Fallback: if API call succeeded and we got a valid dict, assume filled
-                            filled_contracts = contracts
-                        
-                        if filled_contracts > 0:
-                            # Update asset exposure after successful order
-                            exposure_increase = price * filled_contracts
-                            current_exposure = self.risk.get_asset_exposure(self.asset)
-                            self.risk.set_asset_exposure(self.asset, current_exposure + exposure_increase)
-                            
-                            # Track position and state in memory so we don't re-enter
-                            self.position.open(price, filled_contracts, side)
-                            self.state.enter(signal)
-                            self._entry_timestamp = time.time()
-                            self._entry_time_iso = datetime.utcnow().isoformat()
-                            
-                            # Green highlighting for successful orders
-                            print(f"\033[92m[{self.asset}] ✅ ORDER EXECUTED: {order_result}\033[0m")
-                            print(f"[{self.asset}] Order: {filled_contracts} contracts at ${price:.2f}, total value: ${exposure_increase:.2f}")
-                            print(f"[{self.asset}] Current exposure: ${self.risk.get_asset_exposure(self.asset):.2f}")
-                        else:
-                            print(f"[{self.asset}] ⚠️ Order placed but filled 0 contracts (canceled/expired). Not entering position.")
-                    except Exception as e:
-                        print(f"[{self.asset}] Order placement failed: {e}")
-                    finally:
-                        self._order_in_flight = False
+                if isinstance(signal_result, tuple):
+                    signal, win_prob = signal_result
                 else:
-                    print(f"[{self.asset}] Skipping trade: No contracts available within $5 limit")
+                    signal = signal_result
+                    win_prob = 0.55
 
-        # EXIT LOGIC
-        else:
-            current_price = yes_price if self.position.side == "yes" else no_price
-            if current_price is not None:
-                futures_trend = self.futures.get_trend_direction()
                 regime = getattr(self.signal, 'current_regime', 'RANGE')
-                exit_signal = self.position.update(current_price, futures_trend, time_remaining, move_pct, regime=regime)
 
-                if exit_signal == "EXIT":
-                    # Capture position fields NOW — before position.close() resets them to None
-                    exit_side = self.position.side
-                    exit_entry_price = self.position.entry_price
-                    exit_contracts = self.position.contracts
-
-                    try:
-                        # Close position — use pure market order (exit_price=None) to guarantee execution
-                        close_result = await self.kalshi.close_position(
-                            self.current_ticker,
-                            exit_price=None,
+                if signal:
+                    side = "yes" if signal == "ENTER_YES" else "no"
+                    if side == "yes":
+                        base_price = yes_ask if yes_ask is not None else yes_price
+                    else:
+                        no_ask = MicroOptimizations.fast_normalize_price(ticker_data.get("no_ask") or ticker_data.get("no_ask_dollars"))
+                        if no_ask is None and yes_bid is not None: no_ask = 1.0 - yes_bid
+                        base_price = no_ask if no_ask is not None else no_price
+                    
+                    price = min(0.40, base_price + 0.01) if base_price is not None else 0.01
+                    
+                    # ENFORCE MAX $0.40 SNIPER ENTRY
+                    if price <= 0.40:
+                        contracts = self.risk.calculate_contracts(
+                            price=price, asset_name=self.asset, multiplier=multiplier,
+                            recent_pnl_pct=self.risk.get_recent_performance(), win_prob=win_prob, regime=regime
                         )
-                        print(f"[{self.asset}] Position closed response: {close_result}")
                         
-                        # Extract actual filled contracts from close response
-                        order_details = {}
-                        if isinstance(close_result, dict):
-                            order_details = close_result.get("order") or close_result
-                        
-                        raw_fill = (
-                            order_details.get("fill_count")
-                            or order_details.get("fill_count_fp")
-                            or order_details.get("filled_count")
-                            or order_details.get("filled_contracts")
-                        )
-                        filled_close = 0
-                        if raw_fill is not None:
+                        if contracts > 0:
                             try:
-                                filled_close = int(float(raw_fill))
-                            except Exception:
-                                filled_close = 0
-                        else:
-                            # Fallback if no raw_fill is present but request succeeded
-                            filled_close = exit_contracts
-                            
-                        if filled_close > 0:
-                            # Update asset exposure after closing position
-                            current_exposure = self.risk.get_asset_exposure(self.asset)
-                            position_value = (exit_entry_price or 0) * filled_close
-                            new_exposure = max(0, current_exposure - position_value)
-                            self.risk.set_asset_exposure(self.asset, new_exposure)
-                            
-                            # Correct PnL direction:
-                            #   YES bet profits when price rises  → profit = exit - entry
-                            #   NO  bet profits when price falls  → profit = entry - exit
-                            raw_profit_per_contract = current_price - (exit_entry_price or 0)
-                            profit_usd = raw_profit_per_contract * filled_close
-                            profit_pct = (
-                                raw_profit_per_contract / exit_entry_price * 100
-                                if exit_entry_price and exit_entry_price > 0 else 0.0
-                            )
-                            outcome = "WIN" if profit_usd >= 0 else "LOSS"
+                                self._order_in_flight = True
+                                print(f"[{self.asset}] Sniper Triggered! Signal: {signal}, executing at ${price:.2f}")
+                                order_result = await self.kalshi.place_market_order(
+                                    ticker=self.current_ticker, side=side, contracts=contracts, price=price
+                                )
+                                
+                                # Process fill
+                                order_details = order_result.get("order") or order_result if isinstance(order_result, dict) else {}
+                                raw_fill = order_details.get("fill_count") or order_details.get("fill_count_fp") or order_details.get("filled_count") or order_details.get("filled_contracts")
+                                
+                                filled_contracts = 0
+                                if raw_fill is not None:
+                                    try: filled_contracts = int(float(raw_fill))
+                                    except Exception: filled_contracts = 0
+                                else:
+                                    filled_contracts = contracts
+                                
+                                if filled_contracts > 0:
+                                    exposure_increase = price * filled_contracts
+                                    current_exposure = self.risk.get_asset_exposure(self.asset)
+                                    self.risk.set_asset_exposure(self.asset, current_exposure + exposure_increase)
+                                    
+                                    self.position.open(price, filled_contracts, side)
+                                    self.state.enter(signal)
+                                    self._entry_timestamp = time.time()
+                                    self._entry_time_iso = datetime.utcnow().isoformat()
+                                    
+                                    print(f"\033[92m[{self.asset}] ✅ SNIPER EXECUTED: {filled_contracts} contracts at ${price:.2f}\033[0m")
+                            except Exception as e:
+                                print(f"[{self.asset}] Sniper order failed: {e}")
+                            finally:
+                                self._order_in_flight = False
 
-                            # Update risk manager with realized performance
-                            self.risk.update_performance(
-                                pnl_pct=profit_pct / 100,
-                                profit_usd=profit_usd,
-                            )
+        # EXIT LOGIC (HYBRID)
+        else:
+            if getattr(self.position, 'hold_to_expiry', False):
+                # Do nothing, let it expire
+                if time_remaining > 0 and time_remaining % 10 == 0:
+                    print(f"[{self.asset}] Holding TWAP Arb position to expiry. {time_remaining}s left.")
+                return
 
-                            # Reset position and state AFTER logging
-                            self.position.close()
-                            self.state.exit()
-                            
-                            # Log the trade if trade_logger is available
-                            if self.trade_logger:
-                                trade_record = {
-                                    "trade_id": f"{self.asset}_{int(time.time())}",
-                                    "datetime": datetime.utcnow().isoformat(),
-                                    "asset": self.asset,
-                                    "window_start": getattr(self, '_entry_time_iso', ''),
-                                    "window_end": datetime.utcnow().isoformat(),
-                                    "side": exit_side,
-                                    "entry_price": exit_entry_price,
-                                    "exit_price": current_price,
-                                    "contracts": filled_close,
-                                    "profit_usd": profit_usd,
-                                    "profit_pct": profit_pct,
-                                    "outcome": outcome,
-                                    "entry_time": getattr(self, '_entry_time_iso', ''),
-                                    "exit_time": datetime.utcnow().isoformat(),
-                                    "held_seconds": time.time() - getattr(self, '_entry_timestamp', time.time()),
-                                    "multiplier": multiplier if 'multiplier' in locals() else 1.0,
-                                    "strike_distance_pct": abs((spot - self.strike) / self.strike) if spot and self.strike else 0,
-                                    "recent_move_pct": move_pct,
-                                    "time_remaining_sec": time_remaining,
-                                    "futures_trend": self.futures.get_trend_direction(),
-                                    "spot_price": spot,
-                                    "strike_price": self.strike
-                                }
-                                self.trade_logger.log_trade(trade_record)
-                                print(f"[{self.asset}] Trade logged: {outcome} | profit=${profit_usd:.4f} ({profit_pct:.2f}%) | side={exit_side} | entry={exit_entry_price:.3f} exit={current_price:.3f} contracts={filled_close}")
-                        else:
-                            print(f"[{self.asset}] ⚠️ Close order placed but filled 0 contracts. Position remains OPEN.")
-                            
-                    except Exception as e:
-                        print(f"[{self.asset}] Position closure failed: {e}")
+            # We acquired a position! Check if we have placed a sell limit order yet.
+            if not getattr(self, 'take_profit_placed', False):
+                self.take_profit_placed = True
+                
+                # First, cancel any unused resting entry orders (e.g., the other side)
+                for side, oid in getattr(self, 'resting_order_ids', {}).items():
+                    if oid:
+                        try:
+                            await self.kalshi.cancel_order(oid)
+                        except Exception as e:
+                            pass
+                self.resting_order_ids = {"yes": None, "no": None}
+
+                # Evaluate market conditions to set optimal take-profit
+                regime = getattr(self.signal, 'current_regime', 'RANGE')
+                if regime == "VOLATILE":
+                    tp_price = 0.60
+                elif regime == "TRENDING":
+                    tp_price = 0.55
+                else:
+                    tp_price = 0.40
+
+                # Determine if this was a Stink Bid ($0.15) or Sniper (<=$0.40) entry
+                entry_type = "Stink Bid" if self.position.entry_price <= 0.20 else "Sniper"
+
+                # Place take profit limit order
+                print(f"\033[92m[{self.asset}] ✅ {entry_type} filled! Market is {regime}. Placing take-profit sell order at ${tp_price:.2f}\033[0m")
+                try:
+                    tp_client_id = f"tp_{self.asset}_{int(time.time())}"
+                    resp_sell = await self.kalshi.place_limit_order(
+                        ticker=self.current_ticker, 
+                        side=self.position.side, 
+                        contracts=self.position.contracts, 
+                        price=tp_price, 
+                        action="sell",
+                        client_order_id=tp_client_id
+                    )
+                    if isinstance(resp_sell, dict) and "order" in resp_sell:
+                        self.resting_sell_orders[self.position.side] = resp_sell["order"].get("order_id")
+                except Exception as e:
+                    print(f"[{self.asset}] Failed to place take-profit order: {e}")
+                    if "insufficient balance" in str(e).lower() or "timeout" in str(e).lower():
+                        print(f"[{self.asset}] Assuming take-profit is already resting or successfully placed.")
+                        self.take_profit_placed = True
+                    else:
+                        self.take_profit_placed = False

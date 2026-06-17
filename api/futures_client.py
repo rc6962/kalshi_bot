@@ -1,6 +1,7 @@
 import websockets
 import asyncio
 import json
+import aiohttp
 from collections import deque
 import time
 import math
@@ -19,6 +20,9 @@ class FuturesClient:
         self._stop_event = asyncio.Event()
 
     async def connect(self):
+        # Fetch historical data first to warm up the bot instantly
+        await self._fetch_historical_data()
+        
         # Use the bookTicker endpoint which we confirmed is working
         urls = [
             f"wss://fstream.binance.com/ws/{self.symbol}@bookTicker",  # Book ticker - confirmed working
@@ -39,6 +43,36 @@ class FuturesClient:
                     raise
                 else:
                     continue  # Try the next URL
+
+    async def _fetch_historical_data(self):
+        """Fetch last 15 minutes of 1m klines from Binance REST API and interpolate into 1s ticks."""
+        # Try Binance Vision public data API which sometimes bypasses strict REST geo-blocking
+        url = f"https://data-api.binance.vision/api/v3/klines?symbol={self.symbol.upper()}&interval=1m&limit=15"
+        print(f"Fetching historical data from {url} to warm up {self.symbol.upper()}...")
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=5) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        count = 0
+                        for kline in data:
+                            open_time = int(kline[0]) / 1000.0
+                            open_price = float(kline[1])
+                            close_price = float(kline[4])
+                            
+                            # Interpolate 60 seconds
+                            for i in range(60):
+                                t = open_time + i
+                                p = open_price + (close_price - open_price) * (i / 60.0)
+                                self.prices.append((t, p))
+                                count += 1
+                        print(f"Pre-filled {count} historical 1s ticks for {self.symbol.upper()}")
+                        if self.prices:
+                            self.last_price = self.prices[-1][1]
+                    else:
+                        print(f"Failed to fetch historical data: HTTP {resp.status}")
+        except Exception as e:
+            print(f"Warning: Failed to fetch historical data: {e}. Bot will start cold.")
 
     async def _run_websocket_connection(self, url):
         """Run the WebSocket connection in the background"""
@@ -102,6 +136,34 @@ class FuturesClient:
             return 0.0
 
         return (current - start) / start
+
+    def get_final_minute_twap(self, expiry_timestamp):
+        """
+        Calculate the Simple Average (TWAP proxy) of prices in the final 60 seconds
+        before expiry_timestamp.
+        
+        Returns:
+            elapsed_seconds: Number of unique seconds that have elapsed in the final minute (max 60).
+            running_avg: The simple average of those prices. None if no data.
+        """
+        if not self.prices:
+            return 0, None
+            
+        start_cutoff = expiry_timestamp - 60
+        # We only want prices that happened AFTER start_cutoff and BEFORE or AT expiry_timestamp
+        # Group by integer second to simulate 1-second CFB RTI ticks
+        second_prices = {}
+        for t, p in self.prices:
+            if start_cutoff <= t <= expiry_timestamp:
+                second_prices[int(t)] = p
+                
+        if not second_prices:
+            return 0, None
+            
+        elapsed_seconds = len(second_prices)
+        running_avg = sum(second_prices.values()) / elapsed_seconds
+        
+        return elapsed_seconds, running_avg
 
     def get_rolling_volatility(self, window_seconds=VOLATILITY_WINDOW_SECONDS):
         """Calculate standard deviation of 1-second log returns over window_seconds."""

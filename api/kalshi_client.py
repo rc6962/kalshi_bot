@@ -132,6 +132,100 @@ class KalshiClient:
                 f"\npayload={payload}"
             ) from exc
 
+    async def place_limit_order(self, ticker, side, contracts, price, action="buy", client_order_id=None):
+        path = "/trade-api/v2/portfolio/orders"
+        timestamp = str(int(time.time() * 1000))
+        signature = self._sign(timestamp, "POST", path)
+
+        headers = {
+            "KALSHI-ACCESS-KEY": self.api_key,
+            "KALSHI-ACCESS-TIMESTAMP": timestamp,
+            "KALSHI-ACCESS-SIGNATURE": signature,
+            "Content-Type": "application/json",
+        }
+
+        price_cents = max(1, int(round(price * 100)))
+
+        payload = {
+            "ticker": ticker,
+            "action": action,
+            "side": side,
+            "count": contracts,
+            "type": "limit",
+            "time_in_force": "good_till_canceled",
+        }
+
+        if side == "yes":
+            payload["yes_price"] = price_cents
+        else:
+            payload["no_price"] = price_cents
+
+        if client_order_id:
+            payload["client_order_id"] = client_order_id
+
+        print(f"Submitting Kalshi limit order: {payload}")
+
+        max_retries = 3
+        backoff = 1.0
+
+        for attempt in range(max_retries):
+            timestamp = str(int(time.time() * 1000))
+            signature = self._sign(timestamp, "POST", path)
+
+            headers = {
+                "KALSHI-ACCESS-KEY": self.api_key,
+                "KALSHI-ACCESS-TIMESTAMP": timestamp,
+                "KALSHI-ACCESS-SIGNATURE": signature,
+                "Content-Type": "application/json",
+            }
+
+            try:
+                session = await self._get_session()
+                async with session.post(self.base_url + path, headers=headers, json=payload) as resp:
+                    text = await resp.text()
+                    response_data = None
+                    if resp.headers.get("Content-Type", "").startswith("application/json"):
+                        response_data = json.loads(text)
+
+                    if resp.status == 429:
+                        if attempt < max_retries - 1:
+                            wait_time = backoff * (2 ** attempt)
+                            print(f"[KalshiClient] Rate limit (429) placing limit order. Retrying in {wait_time:.1f}s...")
+                            await asyncio.sleep(wait_time)
+                            continue
+
+                    if 200 <= resp.status < 300:
+                        print(f"[KalshiClient] Limit Order OK {resp.status}: {text[:300]}")
+                        return response_data if response_data is not None else text
+
+                    print(f"[KalshiClient] Limit Order REJECTED {resp.status}: {text[:500]}")
+                    raise RuntimeError(f"Kalshi limit order failed {resp.status} {resp.reason}: {text}")
+            except TimeoutError as exc:
+                raise RuntimeError(f"Kalshi limit order timed out") from exc
+            except Exception as e:
+                if attempt < max_retries - 1 and ("429" in str(e) or "too_many_requests" in str(e)):
+                    wait_time = backoff * (2 ** attempt)
+                    print(f"[KalshiClient] Exception {e} placing limit order. Retrying in {wait_time:.1f}s...")
+                    await asyncio.sleep(wait_time)
+                    continue
+                raise
+
+    async def cancel_order(self, order_id):
+        path = f"/trade-api/v2/portfolio/orders/{order_id}"
+        print(f"Canceling Kalshi order: {order_id}")
+        return await self.authenticated_request("DELETE", path)
+
+    async def get_portfolio_orders(self, ticker=None, status="resting"):
+        path = "/trade-api/v2/portfolio/orders"
+        params = {}
+        if ticker:
+            params["ticker"] = ticker
+        if status:
+            params["status"] = status
+        
+        path = self._get_path_with_query(path, params)
+        return await self.authenticated_request("GET", path)
+
     async def authenticated_request(self, method, path):
         # Normalize path to ensure it starts with /trade-api/v2
         if not path.startswith("/trade-api/v2"):
