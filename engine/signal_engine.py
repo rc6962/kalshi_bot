@@ -8,12 +8,17 @@ import time
 import numpy as np
 from datetime import datetime, timezone
 from config import *
+from config import ENABLE_MULTI_TF_CONFIRMATION, TREND_CONFIRMATION_LOOKBACKS, TF_CONFIRMATION_MIN_BPS
+from config import EARLY_WINDOW_BPS_REMAINING, EARLY_IMPULSE_MULTIPLIER, EARLY_SPREAD_MULTIPLIER
+from config import EARLY_LOW_TRUE_MULTIPLIER, EARLY_SKIP_REQUIRES_STRONG_MOVE, EARLY_MIN_CONTRACT_PRICE
+from config import IWMC_ONLY_MODE
 from engine.latency_optimizer import MicroOptimizations
 from engine.regime_detector import RegimeDetector
 from engine.entry_filter import (
     EntryFilter, ContractStateTracker,
     parse_asset_from_ticker, resolve_contract_threshold,
     compute_distance_bps, compute_momentum_bps,
+    confirm_trend_multitf,
     log_decision,
 )
 
@@ -38,6 +43,10 @@ class SignalEngine:
         # Regime detector for volatility/trend classification
         self.regime = RegimeDetector()
         self.current_regime = "RANGE"
+        # Trade frequency tracking (fed by Binance @aggTrade)
+        self.trade_freq_spikes = 0
+        self._last_trade_freq_check = 0.0
+        self.current_trend_strength = 0.0
 
     def _load_ml_model(self):
         """Load LightGBM model in native format. Auto-trains if model is missing but training data exists."""
@@ -176,20 +185,22 @@ class SignalEngine:
 
     def _calculate_ev(self, contract_price, win_prob, side):
         """
-        Calculate Expected Value of a trade.
+        Calculate Expected Value of a trade, net of taker fees.
         
         For YES bets:
           Payout if win = (1.0 - contract_price) per contract
           Loss if lose = contract_price per contract
-          EV = win_prob * (1.0 - contract_price) - (1 - win_prob) * contract_price
+          EV = win_prob * (1.0 - contract_price) - (1 - win_prob) * contract_price - fee
         
         For NO bets:
           Payout if win = contract_price per contract (since NO pays 1 when YES is 0)
           Loss if lose = (1.0 - contract_price) per contract
-          EV = win_prob * contract_price - (1 - win_prob) * (1.0 - contract_price)
+          EV = win_prob * contract_price - (1 - win_prob) * (1.0 - contract_price) - fee
         
-        Returns: EV as a fraction of capital risked
+        Returns: EV as a fraction of capital risked (net of fees)
         """
+        from config import TAKER_FEE_PER_CONTRACT
+        
         if side == "yes":
             payout = 1.0 - contract_price
             loss_amount = contract_price
@@ -197,7 +208,7 @@ class SignalEngine:
             payout = contract_price
             loss_amount = 1.0 - contract_price
         
-        ev = (win_prob * payout) - ((1.0 - win_prob) * loss_amount)
+        ev = (win_prob * payout) - ((1.0 - win_prob) * loss_amount) - TAKER_FEE_PER_CONTRACT
         return ev
 
     def evaluate_ev(self, asset_name, contract_price, bid, ask, strike, spot_price,
@@ -265,7 +276,14 @@ class SignalEngine:
                         recent_move_pct=0.0, futures_trend=0.0, hour_of_day=None,
                         ticker=None, market_meta=None):
         # -------------------------------------------------------------------
-        # 0. NEW: Entry filter (distance, cooldown, reentry, momentum side)
+        # IWMC_ONLY_MODE: If enabled, skip all normal signal evaluation
+        # IWMC signals are handled separately in event_loop.py
+        # -------------------------------------------------------------------
+        if IWMC_ONLY_MODE:
+            return (None, None)
+        
+        # -------------------------------------------------------------------
+        # 1. Entry filter (distance, cooldown, reentry, momentum side)
         # -------------------------------------------------------------------
         if ticker and spot_price and spot_price > 0:
             # Update rolling spot history for momentum computation
@@ -280,6 +298,7 @@ class SignalEngine:
             regime = regime_info["regime"]
             vol_ratio = regime_info["vol_ratio"]
             self.current_regime = regime
+            self.current_trend_strength = regime_info["trend_strength"]
             print(f"[Regime] {asset_name}: regime={regime}, vol_ratio={vol_ratio:.2f}, trend={regime_info['trend_strength']:.6f}")
 
             # SHOCK: block all new entries
@@ -389,7 +408,10 @@ class SignalEngine:
         if strike_float is not None and strike_float > 0:
             try:
                 strike_distance_pct = abs(spot_price - strike_float) / strike_float
-                if strike_distance_pct > params["STRIKE_PROXIMITY_PCT"]:
+                strike_limit = params["STRIKE_PROXIMITY_PCT"]
+                if time_remaining > EARLY_WINDOW_BPS_REMAINING:
+                    strike_limit = strike_limit * 2.0
+                if strike_distance_pct > strike_limit:
                     self._log_rejection(asset_name, None, None, spread_pct, strike_distance_pct, multiplier,
                                         time_remaining, recent_move_pct, futures_trend,
                                         bid, ask, bid_size, ask_size, spot_price, strike,
@@ -409,31 +431,49 @@ class SignalEngine:
                                 f"strike_not_numeric:{strike}")
             return (None, None)
 
-        # 4. Determine raw signal
-        # Apply regime-specific threshold adjustments
+        # 4. Determine raw signal using Coinbase velocity momentum
+        # Research-backed: Coinbase 1-min velocity momentum had 53.74% win rate
+        # (TurbineFi, 100-strategy backtest ending May 4, 2026)
         effective_threshold = params["IMPULSE_THRESHOLD_PCT"]
         if self.current_regime == "HIGH_VOL":
             effective_threshold = effective_threshold * 1.5
+        if time_remaining > EARLY_WINDOW_BPS_REMAINING:
+            effective_threshold = effective_threshold * EARLY_IMPULSE_MULTIPLIER
 
-        from config import SIDE_LOGIC_MODE
         raw_signal = None
-        
-        if SIDE_LOGIC_MODE == "continuation":
-            # Continuation logic (trade with the trend)
-            if recent_move_pct > effective_threshold:
-                # Price pumps -> Buy YES to ride the momentum
-                raw_signal = "ENTER_YES"
-            elif recent_move_pct < -effective_threshold:
-                # Price dumps -> Buy NO to ride the momentum
-                raw_signal = "ENTER_NO"
-        else:
-            # Mean reversion logic (fade the bounce)
-            if recent_move_pct > effective_threshold:
-                # Price pumps -> Buy NO to fade the bounce
-                raw_signal = "ENTER_NO"
-            elif recent_move_pct < -effective_threshold:
-                # Price dumps -> Buy YES to fade the bounce
-                raw_signal = "ENTER_YES"
+
+        # CFB RTI settlement edge check (final ~60 seconds of the 15-min window)
+        # In the settlement window, the 60s CFB RTI moving average is the settlement price.
+        # As the window fills, we know the outcome with increasing certainty.
+        cfb_confirmation = None
+        if time_remaining < 60 and strike is not None and strike > 0:
+            try:
+                from feed.cfb_state import get_avg_60s
+                asset_cfb_id = {
+                    "BTC": "BRTI", "ETH": "ETHUSD_RTI", "SOL": "SOLUSD_RTI",
+                    "XRP": "XRPUSD_RTI", "DOGE": "DOGEUSD_RTI",
+                }.get(asset_name)
+                if asset_cfb_id:
+                    cfb_avg = get_avg_60s(asset_cfb_id)
+                    if cfb_avg is not None and strike > 0:
+                        cfb_ratio = float(cfb_avg) / float(strike)
+                        if cfb_ratio > 1.0005:    # 0.05% above strike → likely YES
+                            cfb_confirmation = "ENTER_YES"
+                        elif cfb_ratio < 0.9995:  # 0.05% below strike → likely NO
+                            cfb_confirmation = "ENTER_NO"
+            except Exception:
+                pass
+
+        # Coinbase velocity momentum signal
+        # If we're in settlement window and have CFB confirmation, use that instead
+        if cfb_confirmation is not None:
+            raw_signal = cfb_confirmation
+        elif recent_move_pct > effective_threshold:
+            # Coinbase 1-min velocity positive → buy YES (price likely to rise)
+            raw_signal = "ENTER_YES"
+        elif recent_move_pct < -effective_threshold:
+            # Coinbase 1-min velocity negative → SHORT YES (sell YES, expecting price down)
+            raw_signal = "ENTER_NO"
 
         if raw_signal is None:
             self._log_rejection(asset_name, None, None, spread_pct, strike_distance_pct, multiplier,
@@ -445,12 +485,14 @@ class SignalEngine:
         # PROFITABILITY FILTER (FOR BOTH YES AND NO)
         if raw_signal in ("ENTER_YES", "ENTER_NO"):
             # Only allow trades during a strong move using the dynamic threshold
-            if abs(recent_move_pct) < effective_threshold:
-                self._log_rejection(asset_name, raw_signal, None, spread_pct, strike_distance_pct, multiplier,
-                                    time_remaining, recent_move_pct, futures_trend,
-                                    bid, ask, bid_size, ask_size, spot_price, strike,
-                                    f"{raw_signal}_requires_strong_move")
-                return (None, None)
+            # Skip this check early in the window when there's more time for the move to develop
+            if not (time_remaining > EARLY_WINDOW_BPS_REMAINING and EARLY_SKIP_REQUIRES_STRONG_MOVE):
+                if abs(recent_move_pct) < effective_threshold:
+                    self._log_rejection(asset_name, raw_signal, None, spread_pct, strike_distance_pct, multiplier,
+                                        time_remaining, recent_move_pct, futures_trend,
+                                        bid, ask, bid_size, ask_size, spot_price, strike,
+                                        f"{raw_signal}_requires_strong_move")
+                    return (None, None)
             
             # Calculate the true multiplier based on the actual contract cost
             contract_cost = None
@@ -462,7 +504,9 @@ class SignalEngine:
             true_multiplier = 1.0 / contract_cost if contract_cost is not None and contract_cost > 0 else 0
             
             # Require a high multiplier to ensure it's a profitable setup
-            if true_multiplier < 2.0:
+            # Relax early in the window when there's more runway for the price to move
+            min_true_mult = EARLY_LOW_TRUE_MULTIPLIER if time_remaining > EARLY_WINDOW_BPS_REMAINING else 2.0
+            if true_multiplier < min_true_mult:
                 self._log_rejection(asset_name, raw_signal, None, spread_pct, strike_distance_pct, multiplier,
                                     time_remaining, recent_move_pct, futures_trend,
                                     bid, ask, bid_size, ask_size, spot_price, strike,
@@ -481,6 +525,25 @@ class SignalEngine:
                     f"filter_side_mismatch:filter={approved_side}_signal={raw_signal}"
                 )
                 return (None, None)
+
+        # 4.2 Multi-timeframe trend confirmation
+        if ENABLE_MULTI_TF_CONFIRMATION:
+            tf_direction = "yes" if raw_signal == "ENTER_YES" else "no"
+            tf_confirmed, tf_moms, tf_detail = confirm_trend_multitf(
+                price_history=self._spot_history,
+                lookbacks=TREND_CONFIRMATION_LOOKBACKS,
+                min_momentum_bps=TF_CONFIRMATION_MIN_BPS,
+                direction=tf_direction,
+            )
+            if not tf_confirmed:
+                self._log_rejection(
+                    asset_name, raw_signal, None, spread_pct, strike_distance_pct, multiplier,
+                    time_remaining, recent_move_pct, futures_trend,
+                    bid, ask, bid_size, ask_size, spot_price, strike,
+                    f"tf_confirmation_failed:{tf_detail}"
+                )
+                return (None, None)
+            print(f"[SignalEngine] {asset_name}: TF trend confirmed ({tf_detail})")
         
         # 4.5 Target Side Spread Filter
         # Calculate spread relative to the actual side we are buying
@@ -494,7 +557,8 @@ class SignalEngine:
 
         if target_bid is not None and target_ask is not None and target_bid > 0 and target_ask > 0:
             spread_pct = MicroOptimizations.fast_spread_pct(target_bid, target_ask)
-            if spread_pct is not None and spread_pct > MAX_SPREAD_PCT:
+            max_spread = MAX_SPREAD_PCT * (EARLY_SPREAD_MULTIPLIER if time_remaining > EARLY_WINDOW_BPS_REMAINING else 1.0)
+            if spread_pct is not None and spread_pct > max_spread:
                 self._log_rejection(asset_name, raw_signal, None, spread_pct, strike_distance_pct, multiplier,
                                     time_remaining, recent_move_pct, futures_trend,
                                     bid, ask, bid_size, ask_size, spot_price, strike,
@@ -526,7 +590,7 @@ class SignalEngine:
             return (None, None)
         try:
             cost_float = float(actual_cost) if not isinstance(actual_cost, (int, float)) else actual_cost
-            if cost_float > 0.50:
+            if cost_float > 0.55:
                 self._log_rejection(asset_name, raw_signal, cost_float, spread_pct, strike_distance_pct, multiplier,
                                     time_remaining, recent_move_pct, futures_trend,
                                     bid, ask, bid_size, ask_size, spot_price, strike,
@@ -535,7 +599,8 @@ class SignalEngine:
             
             # Prevent buying extremely cheap options where spread friction is too high
             from config import MIN_CONTRACT_PRICE
-            if cost_float < MIN_CONTRACT_PRICE:
+            min_price = EARLY_MIN_CONTRACT_PRICE if time_remaining > EARLY_WINDOW_BPS_REMAINING else MIN_CONTRACT_PRICE
+            if cost_float < min_price:
                 self._log_rejection(asset_name, raw_signal, cost_float, spread_pct, strike_distance_pct, multiplier,
                                     time_remaining, recent_move_pct, futures_trend,
                                     bid, ask, bid_size, ask_size, spot_price, strike,
@@ -563,7 +628,14 @@ class SignalEngine:
                 spread_pct=spread_pct
             )
 
-        if USE_ML_VETO and ml_prob is not None and ml_prob < ML_CONFIDENCE_THRESHOLD:
+        # Use higher ML threshold for NO entries (0.70) due to 0/3 WR observed
+        # YES entries use standard threshold (0.55)
+        if raw_signal == "ENTER_NO":
+            ml_threshold = 0.70
+        else:
+            ml_threshold = ML_CONFIDENCE_THRESHOLD
+
+        if USE_ML_VETO and ml_prob is not None and ml_prob < ml_threshold:
             side_str = "YES" if raw_signal == "ENTER_YES" else "NO"
             reason = f"ml_low_confidence_{side_str}:{ml_prob:.4f}"
             self._log_veto(raw_signal, ml_prob, multiplier, strike_distance_pct,
@@ -574,7 +646,7 @@ class SignalEngine:
                                 reason)
             return (None, None)
         elif ml_prob is not None:
-            print(f"[SignalEngine] ML filter passed for {asset_name}: prob={ml_prob:.4f}")
+            print(f"[SignalEngine] ML filter passed for {asset_name}: prob={ml_prob:.4f} (threshold={ml_threshold:.2f})")
             
 
 
@@ -608,7 +680,7 @@ class SignalEngine:
             return (raw_signal, win_prob)
 
         # --- Legacy rule-based filters (used only when USE_EV_ENTRY=False) ---
-        
+
         # 7. Order Book Imbalance (OBI) Filter
         if bid_size is not None and ask_size is not None:
             total_size = bid_size + ask_size
@@ -629,7 +701,7 @@ class SignalEngine:
                                     bid, ask, bid_size, ask_size, spot_price, strike,
                                     "low_liquidity_hours")
                 return (None, None)
-        
+
         # 9. Futures trend alignment
         if futures_trend is not None and futures_trend != 0:
             if raw_signal == "ENTER_YES" and futures_trend < 0:
@@ -653,5 +725,12 @@ class SignalEngine:
             win_prob = ml_prob
         else:
             win_prob = self._estimate_win_prob(recent_move_pct, time_remaining)
-        
+
         return (raw_signal, win_prob)
+
+    def update_trade_freq(self, agg_trade_price: float):
+        now = time.time()
+        if now - self._last_trade_freq_check < 1.0:
+            return
+        self._last_trade_freq_check = now
+        pass

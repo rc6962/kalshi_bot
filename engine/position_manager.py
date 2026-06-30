@@ -11,14 +11,23 @@ class PositionManager:
         self.side = None
         self.peak_pnl = 0.0
         self.entry_time = None
+        self.position_type = "buy"     # "buy" = long YES, "sell" = short YES (converted NO)
 
-    def open(self, price=None, contracts=0, side=None):
+    def open(self, price=None, contracts=0, side=None, position_type="buy", reset_peak=True):
         self.entry_price = price
         self.best_price = price
         self.contracts = contracts
         self.side = side
         self.entry_time = time.time()
-        self.peak_pnl = 0.0
+        if reset_peak:
+            self.peak_pnl = 0.0
+        self.position_type = position_type
+
+    def sync_from_portfolio(self, port_pos):
+        self.entry_price = float(port_pos.get("entry_price", 0.0))
+        self.contracts = int(port_pos.get("count", 0))
+        self.side = port_pos.get("side")
+        self.entry_time = None
 
     def close(self):
         self.entry_price = None
@@ -27,6 +36,7 @@ class PositionManager:
         self.peak_pnl = 0.0
         self.side = None
         self.entry_time = None
+        self.position_type = "buy"
 
     def _pnl(self, current_price):
         if self.entry_price is None or self.side not in ("yes", "no"):
@@ -49,19 +59,19 @@ class PositionManager:
         if pnl > self.peak_pnl:
             self.peak_pnl = pnl
         elapsed = time.time() - self.entry_time if self.entry_time else 0
-        print(f"[PositionManager] pnl={pnl:.4%} peak={self.peak_pnl:.4%} elapsed={elapsed:.1f}s entry={self.entry_price:.4f} current={current_price:.4f} trend={futures_trend} time_rem={time_remaining} side={self.side} regime={regime}")
+        # print(f"[PositionManager] pnl={pnl:.4%} peak={self.peak_pnl:.4%} elapsed={elapsed:.1f}s entry={self.entry_price:.4f} current={current_price:.4f} trend={futures_trend} time_rem={time_remaining} side={self.side} regime={regime}")
 
         # If early exits are disabled, bypass all exit checks and hold to expiry
         from config import DISABLE_EARLY_EXITS
         if DISABLE_EARLY_EXITS:
-            print(f"[PositionManager] HOLD: early exits disabled; letting position settle at expiry")
+            # print(f"[PositionManager] HOLD: early exits disabled; letting position settle at expiry")
             return (None, None)
 
         # --- LATE WINDOW LOGIC (Takes precedence) ---
         if time_remaining is not None:
             # 1. Winning in the last 3 minutes -> Let it settle!
             if time_remaining <= 180 and pnl > 0:
-                print(f"[PositionManager] HOLD: winning in last 3 mins, letting it settle (pnl={pnl:.4%})")
+                # print(f"[PositionManager] HOLD: winning in last 3 mins, letting it settle (pnl={pnl:.4%})")
                 return (None, None)
             
             # 2. Losing in the last 1 minute -> Close it out for whatever we can salvage
@@ -97,12 +107,12 @@ class PositionManager:
 
         # --- Minimum hold time gate — no further exits before this ---
         if elapsed < MIN_HOLD_TIME_SECONDS:
-            print(f"[PositionManager] HOLD: min hold time ({elapsed:.0f}s < {MIN_HOLD_TIME_SECONDS}s)")
+            # print(f"[PositionManager] HOLD: min hold time ({elapsed:.0f}s < {MIN_HOLD_TIME_SECONDS}s)")
             return (None, None)
 
         # --- SHOCK regime: only hard stop fires, let binary settle ---
         if regime == "SHOCK":
-            print(f"[PositionManager] HOLD: SHOCK regime — only hard stop active, letting binary settle")
+            # print(f"[PositionManager] HOLD: SHOCK regime — only hard stop active, letting binary settle")
             return (None, None)
 
         # --- Trailing Profit Model ---
@@ -113,6 +123,6 @@ class PositionManager:
                 print(f"[PositionManager] EXIT: convex trailing (peak={self.peak_pnl:.4%}, pnl={pnl:.4%}, retrace={self.peak_pnl - pnl:.4%})")
                 return ("EXIT", "trailing_stop")
 
-        print(f"[PositionManager] HOLD: no exit condition met")
+        # print(f"[PositionManager] HOLD: no exit condition met")
         return (None, None)
 

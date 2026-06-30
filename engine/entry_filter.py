@@ -14,10 +14,10 @@ Pure helper functions for:
 Plus a ContractStateTracker for per-contract reentry and cooldown limits.
 """
 
-import time
 import json
-import re
 import logging
+import re
+import time
 from datetime import datetime, timezone
 
 import config as cfg
@@ -54,9 +54,18 @@ def parse_window_from_ticker(ticker: str) -> tuple[int | None, int | None]:
         minute = int(date_part[7:9])
 
         month_map = {
-            "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4,
-            "MAY": 5, "JUN": 6, "JUL": 7, "AUG": 8,
-            "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12,
+            "JAN": 1,
+            "FEB": 2,
+            "MAR": 3,
+            "APR": 4,
+            "MAY": 5,
+            "JUN": 6,
+            "JUL": 7,
+            "AUG": 8,
+            "SEP": 9,
+            "OCT": 10,
+            "NOV": 11,
+            "DEC": 12,
         }
         month = month_map.get(month_str)
         if month is None:
@@ -64,6 +73,7 @@ def parse_window_from_ticker(ticker: str) -> tuple[int | None, int | None]:
 
         year = datetime.now(timezone.utc).year
         import calendar as _cal
+
         expiry_struct = time.struct_time((year, month, day, hour, minute, 0, 0, 0, 0))
         window_end = _cal.timegm(expiry_struct)
         window_start = window_end - 15 * 60
@@ -76,14 +86,23 @@ def parse_window_from_ticker(ticker: str) -> tuple[int | None, int | None]:
 # Threshold Resolution
 # ---------------------------------------------------------------------------
 
+
 def resolve_contract_threshold(market_meta: dict | None, ticker: str) -> float | None:
     """
     Prefer clean metadata field, fall back to numeric suffix in ticker.
     Returns the threshold price as a float, or None if not determinable.
     """
     if market_meta:
-        for key in ("strike_price", "strike", "threshold", "cap_strike",
-                    "floor_strike", "yes_sub_title", "sub_title", "subtitle"):
+        for key in (
+            "strike_price",
+            "strike",
+            "threshold",
+            "cap_strike",
+            "floor_strike",
+            "yes_sub_title",
+            "sub_title",
+            "subtitle",
+        ):
             val = market_meta.get(key)
             if val is not None:
                 try:
@@ -108,6 +127,7 @@ def resolve_contract_threshold(market_meta: dict | None, ticker: str) -> float |
 # Distance / Momentum
 # ---------------------------------------------------------------------------
 
+
 def compute_distance_bps(spot: float, threshold: float) -> float:
     """Return |spot - threshold| / spot * 10000 (basis points)."""
     if spot <= 0:
@@ -115,7 +135,9 @@ def compute_distance_bps(spot: float, threshold: float) -> float:
     return abs(spot - threshold) / spot * 10_000
 
 
-def compute_momentum_bps(price_history: list[tuple[float, float]], lookback_seconds: float) -> float:
+def compute_momentum_bps(
+    price_history: list[tuple[float, float]], lookback_seconds: float
+) -> float:
     """
     Compute momentum in basis-points from price history.
 
@@ -144,12 +166,84 @@ def compute_momentum_bps(price_history: list[tuple[float, float]], lookback_seco
 
 
 # ---------------------------------------------------------------------------
+# Multi-Timeframe Trend Confirmation
+# ---------------------------------------------------------------------------
+
+
+def confirm_trend_multitf(
+    price_history: list[tuple[float, float]],
+    lookbacks: list[int],
+    min_momentum_bps: float,
+    direction: str,
+) -> tuple[bool, list[float], str]:
+    """
+    Confirm that price trend across multiple lookbacks agrees with the trade direction.
+    Gracefully handles insufficient history by skipping unavailable lookbacks.
+
+    Args:
+        price_history: list of (unix_ts, price) sorted oldest-first
+        lookbacks: list of lookback windows in seconds (e.g. [60, 300, 600])
+        min_momentum_bps: minimum momentum required at each TF to confirm
+        direction: "yes" or "no"
+
+    Returns:
+        (confirmed, momentum_bps_list, detail)
+        confirmed: True if ALL available timeframes agree with direction
+                   True if NO timeframes have enough data (pass-through)
+        momentum_bps_list: momentum values at each lookback (None if skipped)
+        detail: human-readable string
+    """
+    if len(price_history) < 2:
+        return True, [], "skipped:insufficient_history"
+
+    now_ts = price_history[-1][0]
+    oldest_ts = price_history[0][0]
+    available_span = now_ts - oldest_ts
+
+    results = []
+    detail_parts = []
+    any_checked = False
+    all_confirm = True
+
+    for lb in lookbacks:
+        if available_span < lb:
+            results.append(None)
+            detail_parts.append(f"{lb}s:skip")
+            continue
+        any_checked = True
+        mom = compute_momentum_bps(price_history, float(lb))
+        results.append(mom)
+
+        if direction == "yes":
+            aligns = mom >= min_momentum_bps
+        else:
+            aligns = mom <= -min_momentum_bps
+
+        if aligns:
+            detail_parts.append(f"{lb}s:{mom:+.1f}bps")
+        else:
+            detail_parts.append(f"{lb}s:{mom:+.1f}bps(X)")
+            all_confirm = False
+
+    if not any_checked:
+        return True, results, "skipped:no_tf_available"
+
+    detail = ",".join(detail_parts)
+    return all_confirm, results, detail
+
+
+# ---------------------------------------------------------------------------
 # Side Inference
 # ---------------------------------------------------------------------------
 
-def infer_side(spot: float, threshold: float, momentum_bps: float,
-               time_remaining_sec: float | None = None,
-               mode: str = "mean_reversion") -> str | None:
+
+def infer_side(
+    spot: float,
+    threshold: float,
+    momentum_bps: float,
+    time_remaining_sec: float | None = None,
+    mode: str = "mean_reversion",
+) -> str | None:
     """
     Infer YES / NO based on spot vs threshold and momentum direction.
 
@@ -163,25 +257,21 @@ def infer_side(spot: float, threshold: float, momentum_bps: float,
 
     Returns 'yes', 'no', or None (skip).
     """
-    if time_remaining_sec is not None:
-        if time_remaining_sec > 300:
-            mode = "continuation"
-        else:
-            mode = "mean_reversion"
+    # Always use continuation on 15-min crypto — mean_reversion has 0% win rate on this timeframe
+    mode = "continuation"
 
     min_mom = cfg.MIN_MOMENTUM_ABS_BPS
     if mode == "continuation":
-        if spot > threshold and momentum_bps >= min_mom:
+        # Ride the trend
+        if momentum_bps >= min_mom:
             return "yes"
-        # Asymmetric logic: allow NO trades during a strong bounce (mean reversion for NO)
-        if spot > threshold and momentum_bps >= min_mom * 2: # strong bounce
-            return "no"
-        if spot < threshold and momentum_bps <= -min_mom:
+        if momentum_bps <= -min_mom:
             return "no"
     else:  # mean_reversion
-        if spot > threshold and momentum_bps <= -min_mom:
+        # Fade the move (expecting a bounce back)
+        if momentum_bps >= min_mom:
             return "no"
-        if spot < threshold and momentum_bps >= min_mom:
+        if momentum_bps <= -min_mom:
             return "yes"
     return None
 
@@ -189,6 +279,7 @@ def infer_side(spot: float, threshold: float, momentum_bps: float,
 # ---------------------------------------------------------------------------
 # Contract State Tracker
 # ---------------------------------------------------------------------------
+
 
 class ContractStateTracker:
     """
@@ -207,16 +298,19 @@ class ContractStateTracker:
         self._asset_contracts: dict[str, int] = {}
 
     def get(self, ticker: str) -> dict:
-        return self._state.setdefault(ticker, {
-            "first_seen_time": None,
-            "last_signal_time": None,
-            "last_order_time": None,
-            "last_fill_time": None,
-            "filled_entry_count": 0,
-            "total_contracts_filled": 0,
-            "last_decision": None,
-            "last_skip_reason": None,
-        })
+        return self._state.setdefault(
+            ticker,
+            {
+                "first_seen_time": None,
+                "last_signal_time": None,
+                "last_order_time": None,
+                "last_fill_time": None,
+                "filled_entry_count": 0,
+                "total_contracts_filled": 0,
+                "last_decision": None,
+                "last_skip_reason": None,
+            },
+        )
 
     def record_signal(self, ticker: str):
         s = self.get(ticker)
@@ -236,7 +330,9 @@ class ContractStateTracker:
         s["filled_entry_count"] += 1
         s["total_contracts_filled"] += contracts
         self._last_fill[asset] = now
-        self._window_contracts[ticker] = self._window_contracts.get(ticker, 0) + contracts
+        self._window_contracts[ticker] = (
+            self._window_contracts.get(ticker, 0) + contracts
+        )
         self._asset_contracts[asset] = self._asset_contracts.get(asset, 0) + contracts
 
     def last_fill_for_asset(self, asset: str) -> float:
@@ -257,6 +353,7 @@ class ContractStateTracker:
 # ---------------------------------------------------------------------------
 # Core Entry Filter
 # ---------------------------------------------------------------------------
+
 
 class EntryFilter:
     """
@@ -340,8 +437,10 @@ class EntryFilter:
 
         # 6. Reentry limit
         state = tracker.get(ticker)
-        if state["filled_entry_count"] >= cfg.MAX_REENTRIES_PER_CONTRACT:
-            result["skip_reason"] = f"MAX_REENTRIES_REACHED:{state['filled_entry_count']}"
+        if state["filled_entry_count"] > cfg.MAX_REENTRIES_PER_CONTRACT:
+            result["skip_reason"] = (
+                f"MAX_REENTRIES_REACHED:{state['filled_entry_count']}"
+            )
             return result
 
         # 7. Cooldown since last fill in same asset
@@ -349,13 +448,23 @@ class EntryFilter:
         if last_fill_ts > 0:
             elapsed = time.time() - last_fill_ts
             if elapsed < cfg.COOLDOWN_SECONDS_AFTER_FILL:
-                result["skip_reason"] = f"COOLDOWN_ACTIVE:{elapsed:.0f}s_of_{cfg.COOLDOWN_SECONDS_AFTER_FILL}s"
+                result["skip_reason"] = (
+                    f"COOLDOWN_ACTIVE:{elapsed:.0f}s_of_{cfg.COOLDOWN_SECONDS_AFTER_FILL}s"
+                )
                 return result
 
         # 8. Side inference from momentum
-        side = infer_side(spot, threshold, momentum_bps, time_remaining_sec=time_remaining_sec, mode=cfg.SIDE_LOGIC_MODE)
+        side = infer_side(
+            spot,
+            threshold,
+            momentum_bps,
+            time_remaining_sec=time_remaining_sec,
+            mode=cfg.SIDE_LOGIC_MODE,
+        )
         if side is None:
-            result["skip_reason"] = f"MOMENTUM_DOES_NOT_CONFIRM_SIDE:mom={momentum_bps:.2f}bps"
+            result["skip_reason"] = (
+                f"MOMENTUM_DOES_NOT_CONFIRM_SIDE:mom={momentum_bps:.2f}bps"
+            )
             return result
 
         # 9. Window exposure limit
