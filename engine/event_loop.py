@@ -183,6 +183,11 @@ class EventLoop:
             0.0  # bps/sec, positive=rising, negative=falling
         )
 
+        # Spot price history for IWMC volatility estimation (last 60 1-min prices)
+        self._spot_price_history: list[
+            tuple[float, float]
+        ] = []  # (unix_ts, spot_price)
+
     async def _maybe_place_market(self, **kw):
         """Place market order with fill validation. Retry with wider price if fill is 0."""
         from config import IOC_MIN_FILL_RETRY, IOC_RETRY_PRICE_BUFFER
@@ -287,7 +292,7 @@ class EventLoop:
                             entry_price = float(entry_price)
                             if entry_price > 1:
                                 entry_price = entry_price / 100
-                        except (Exception):
+                        except Exception:
                             entry_price = 0
 
                         self.position.entry_price = entry_price
@@ -447,7 +452,7 @@ class EventLoop:
                 if position_fp is not None:
                     try:
                         side = "yes" if float(position_fp) > 0 else "no"
-                    except (Exception):
+                    except Exception:
                         side = None
 
             if side not in ("yes", "no"):
@@ -464,7 +469,7 @@ class EventLoop:
             )
             try:
                 contracts = abs(int(float(raw_contracts or 0)))
-            except (Exception):
+            except Exception:
                 contracts = 0
 
             if contracts <= 0:
@@ -481,7 +486,7 @@ class EventLoop:
                     entry_price = float(entry_price)
                     if entry_price > 1:
                         entry_price = entry_price / 100
-                except (Exception):
+                except Exception:
                     entry_price = 0.0
             else:
                 entry_price = 0.0
@@ -712,7 +717,7 @@ class EventLoop:
                         value.replace("+00:00", "Z"), "%Y-%m-%dT%H:%M:%SZ"
                     )
                     return calendar.timegm(parsed)
-                except (Exception):
+                except Exception:
                     return None
 
             def parse_ticker_fallback(ticker):
@@ -743,7 +748,7 @@ class EventLoop:
                         (time.gmtime().tm_year, month, day, hour, minute, 0, 0, 0, 0)
                     )
                     return calendar.timegm(expiry_struct)
-                except (Exception):
+                except Exception:
                     return None
 
             def parse_event_target(event):
@@ -763,19 +768,19 @@ class EventLoop:
                     if match:
                         try:
                             return float(match.group(1).replace(",", ""))
-                        except (Exception):
+                        except Exception:
                             return None
                     match = RegexPatterns.TARGET.search(text)
                     if match:
                         try:
                             return float(match.group(1).replace(",", ""))
-                        except (Exception):
+                        except Exception:
                             return None
                     match = RegexPatterns.TARGET_PREFIX.search(text)
                     if match:
                         try:
                             return float(match.group(1).replace(",", ""))
-                        except (Exception):
+                        except Exception:
                             return None
                 return None
 
@@ -788,7 +793,7 @@ class EventLoop:
                 if strike is not None:
                     try:
                         return float(strike)
-                    except (TypeError, ValueError):
+                    except TypeError, ValueError:
                         return None
                 return None
 
@@ -934,7 +939,7 @@ class EventLoop:
                     value.replace("+00:00", "Z"), "%Y-%m-%dT%H:%M:%SZ"
                 )
                 return calendar.timegm(parsed)
-            except (Exception):
+            except Exception:
                 return None
 
         def parse_ticker_fallback(ticker):
@@ -967,7 +972,7 @@ class EventLoop:
                     (time.gmtime().tm_year, month, day, hour, minute, 0, 0, 0, 0)
                 )
                 return calendar.timegm(expiry_struct)
-            except (Exception):
+            except Exception:
                 return None
 
         def parse_event_target(event):
@@ -989,21 +994,21 @@ class EventLoop:
                 if match:
                     try:
                         return float(match.group(1).replace(",", ""))
-                    except (Exception):
+                    except Exception:
                         return None
 
                 match = RegexPatterns.TARGET.search(text)
                 if match:
                     try:
                         return float(match.group(1).replace(",", ""))
-                    except (Exception):
+                    except Exception:
                         return None
 
                 match = RegexPatterns.TARGET_PREFIX.search(text)
                 if match:
                     try:
                         return float(match.group(1).replace(",", ""))
-                    except (Exception):
+                    except Exception:
                         return None
 
             for text in text_fields:
@@ -1014,7 +1019,7 @@ class EventLoop:
                         value = float(match.group(1).replace(",", ""))
                         if value >= 1000:
                             return value
-                    except (Exception):
+                    except Exception:
                         continue
 
             return None
@@ -1026,7 +1031,7 @@ class EventLoop:
             if "-B" in ticker:
                 try:
                     return float(ticker.split("-B")[1])
-                except (Exception):
+                except Exception:
                     pass
 
             parts = ticker.split("-")
@@ -1041,7 +1046,7 @@ class EventLoop:
                     else:
                         if strike >= 1000:
                             return strike
-                except (Exception):
+                except Exception:
                     if part.upper().startswith("B"):
                         try:
                             val = float(part[1:])
@@ -1050,7 +1055,7 @@ class EventLoop:
                                     return val
                             else:
                                 return val
-                        except (Exception):
+                        except Exception:
                             pass
             return None
 
@@ -1093,6 +1098,11 @@ class EventLoop:
                     except asyncio.TimeoutError:
                         print(
                             f"Market discovery timed out for {series}, moving to next..."
+                        )
+                        break
+                    except asyncio.CancelledError:
+                        print(
+                            f"Market discovery cancelled for {series} (timeout or shutdown), moving to next..."
                         )
                         break
                     except Exception as e:
@@ -1228,7 +1238,7 @@ class EventLoop:
                             try:
                                 strike = float(match.group(1).replace(",", ""))
                                 break
-                            except (Exception):
+                            except Exception:
                                 pass
                 if strike is None:
                     strike = parse_market_strike(ticker)
@@ -1337,13 +1347,9 @@ class EventLoop:
             msg = data.get("msg", {})
             self.l2_bids = {p: q for p, q in msg.get("bids", [])}
             self.l2_asks = {p: q for p, q in msg.get("asks", [])}
-            if not hasattr(self, "_debug_ob"):
-                self._debug_ob = 0
-            self._debug_ob += 1
-            if self._debug_ob <= 2:
-                print(
-                    f"[{self.asset}] DEBUG OB SNAPSHOT: l2b={len(self.l2_bids)} l2a={len(self.l2_asks)}"
-                )
+            print(
+                f"[{self.asset}] ORDERBOOK SNAPSHOT: l2b={len(self.l2_bids)} l2a={len(self.l2_asks)}"
+            )
             return  # Don't reach signal evaluation for orderbook msgs
         elif msg_type == "orderbook_delta":
             msg = data.get("msg", {})
@@ -1365,15 +1371,6 @@ class EventLoop:
         self.latest_ticker_data = data
 
         ticker_data = data.get("data") or data.get("msg") or {}
-        # DEBUG: confirm ticker handler is reaching signal evaluation
-        msg_type = data.get("type")
-        if not hasattr(self, "_debug_ticker_count"):
-            self._debug_ticker_count = 0
-        self._debug_ticker_count += 1
-        if self._debug_ticker_count <= 3:
-            print(
-                f"[{self.asset}] DEBUG ticker #{self._debug_ticker_count} type={msg_type} yes={ticker_data.get('yes_bid_dollars')}/{ticker_data.get('yes_ask_dollars')}"
-            )
         ticker = (
             ticker_data.get("market_ticker")
             or ticker_data.get("ticker")
@@ -1628,6 +1625,21 @@ class EventLoop:
         if not spot:
             return
 
+        # Record spot price for IWMC volatility estimation (once per minute)
+        now_ts = time.time()
+        self._spot_price_history.append((now_ts, spot))
+        # Keep only last 60 minutes
+        self._spot_price_history = [
+            (t, p) for t, p in self._spot_price_history if now_ts - t <= 3600
+        ]
+        # Keep only 1 price per minute for volatility calc
+        minute_buckets = {}
+        for t, p in self._spot_price_history:
+            minute = int(t)
+            if minute not in minute_buckets:
+                minute_buckets[minute] = p
+        spot_prices_for_iwmc = list(minute_buckets.values())[-60:]
+
         # Initialize strike if it is None (e.g. for Up or Down markets where strike is TBD at discovery)
         if self.strike is None:
             self.strike = spot
@@ -1672,7 +1684,7 @@ class EventLoop:
             if not getattr(self, "_order_in_flight", False):
                 try:
                     multiplier = self.risk.calculate_multiplier(spot, self.strike)
-                except (Exception):
+                except Exception:
                     multiplier = 1.0
 
                 # Bid/Ask variables hoisted to global tick scope
@@ -1693,10 +1705,7 @@ class EventLoop:
                     self.last_signal_time = current_time
                     self.last_spot_price = spot
 
-                    # DEBUG: confirm we're inside can_enter() and calling signal.evaluate
-                    print(
-                        f"[{self.asset}] DEBUG: calling signal.evaluate state={self.state.state} strike={self.strike} yes={yes_bid}/{yes_ask}"
-                    )
+                    pass
 
                     signal_result = self.signal.evaluate(
                         asset_name=self.asset,
@@ -1733,6 +1742,8 @@ class EventLoop:
                         current_kalshi_price=yes_ask
                         if yes_ask is not None
                         else yes_price,
+                        strike_price=self.strike,
+                        spot_prices=spot_prices_for_iwmc,
                         time_remaining=time_remaining,
                     )
                     if iwmc_signal:
@@ -1757,10 +1768,6 @@ class EventLoop:
 
                 crmd_signal = None
                 if ENABLE_CRMD and self.strike is not None and self.strike > 0:
-                    # DEBUG: confirm CRMD is being evaluated
-                    print(
-                        f"[{self.asset}] DEBUG CRMD: strike={self.strike} time={time_remaining}"
-                    )
                     crmd_signal = self.crmd.evaluate(
                         strike=self.strike,
                         kalshi_yes_price=yes_ask if yes_ask is not None else yes_price,
@@ -1793,12 +1800,6 @@ class EventLoop:
                     and self.strike > 0
                     and 180 <= time_remaining <= 840
                 ):
-                    # DEBUG: confirm SKEW_FADE is being evaluated
-                    l2b = sum(self.l2_bids.values()) if self.l2_bids else 0
-                    l2a = sum(self.l2_asks.values()) if self.l2_asks else 0
-                    print(
-                        f"[{self.asset}] DEBUG SKEW: l2b={l2b} l2a={l2a} time={time_remaining}"
-                    )
                     skew_signal = self.skew_fade.evaluate(
                         l2_bids=self.l2_bids,
                         l2_asks=self.l2_asks,
@@ -2203,7 +2204,7 @@ class EventLoop:
                                 if raw_fill is not None:
                                     try:
                                         filled_contracts = int(float(raw_fill))
-                                    except (Exception):
+                                    except Exception:
                                         filled_contracts = 0
                                 else:
                                     if order_type == "MARKET":
@@ -2596,7 +2597,7 @@ class EventLoop:
                                         if oid:
                                             try:
                                                 await self._maybe_cancel(oid)
-                                            except (Exception):
+                                            except Exception:
                                                 pass
                                 self.resting_order_ids = {"yes": None, "no": None}
                                 self.resting_order_prices = {"yes": 0.0, "no": 0.0}
@@ -2613,7 +2614,7 @@ class EventLoop:
                             if oid:
                                 try:
                                     await self._maybe_cancel(oid)
-                                except (Exception):
+                                except Exception:
                                     pass
                         old_exposure = self.risk.get_asset_exposure(self.asset)
                         if old_exposure > 0:

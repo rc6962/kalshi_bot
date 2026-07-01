@@ -12,6 +12,7 @@ information flow across windows that no strategy exploits.
 
 import asyncio
 import json
+import math
 import os
 import time
 from collections import deque
@@ -135,6 +136,86 @@ class InterWindowMomentumCarry:
 
         return latest.momentum
 
+    def estimate_volatility(
+        self, asset: str, spot_prices: List[float]
+    ) -> Optional[float]:
+        """
+        Estimate 15-minute realized volatility from recent spot prices.
+
+        Uses rolling 1-minute log returns, scaled to 15-minute horizon.
+        Requires at least 15 price points (15 minutes of 1-min data).
+
+        Returns σ_15m (15-minute standard deviation in dollar terms).
+        """
+        if len(spot_prices) < 16:
+            return None
+
+        # Calculate log returns
+        log_returns = []
+        for i in range(1, len(spot_prices)):
+            if spot_prices[i] > 0 and spot_prices[i - 1] > 0:
+                log_ret = math.log(spot_prices[i] / spot_prices[i - 1])
+                log_returns.append(log_ret)
+
+        if len(log_returns) < 15:
+            return None
+
+        # Use last 30 returns (30 minutes of data)
+        recent_returns = log_returns[-30:]
+
+        # Calculate standard deviation of 1-minute returns
+        mean_ret = sum(recent_returns) / len(recent_returns)
+        variance = sum((r - mean_ret) ** 2 for r in recent_returns) / len(
+            recent_returns
+        )
+        sigma_1m = math.sqrt(variance)
+
+        # Scale to 15 minutes: σ_15m = σ_1m * sqrt(15)
+        sigma_15m = sigma_1m * math.sqrt(15)
+
+        # Convert to dollar terms: σ_$ = current_price * σ_15m
+        current_price = spot_prices[-1]
+        sigma_dollars = current_price * sigma_15m
+
+        return sigma_dollars
+
+    def normal_cdf(self, x: float) -> float:
+        """Standard normal cumulative distribution function."""
+        return 0.5 * (1 + math.erf(x / math.sqrt(2)))
+
+    def calculate_win_probability(
+        self, predicted_price: float, strike: float, volatility: float
+    ) -> float:
+        """
+        Calculate P(S_T > K) using normal approximation.
+
+        P(S_T > K) = 1 - Φ((K - μ) / σ)
+
+        Where:
+        - μ = predicted_price
+        - K = strike
+        - σ = volatility (15-minute std dev in dollars)
+
+        Returns probability between 0 and 1.
+        """
+        if volatility <= 0:
+            return 0.5  # No volatility info → 50/50
+
+        z_score = (predicted_price - strike) / volatility
+        return self.normal_cdf(z_score)
+
+    def kalshi_fee(self, price: float) -> float:
+        """
+        Calculate Kalshi fee for a given contract price.
+
+        fee = multiplier × price × (1 - price)
+        Crypto multiplier = 0.07
+
+        Peak fee at $0.50: $0.0175
+        """
+        multiplier = 0.07
+        return multiplier * price * (1 - price)
+
     def get_latest_settlement_price(self, asset: str) -> Optional[float]:
         """Get the most recent settlement price for an asset."""
         history = self.settlement_history.get(asset, deque())
@@ -252,6 +333,11 @@ class InterWindowMomentumCarry:
         # Predict next window open: source_settlement * (1 + carry_momentum)
         predicted_open = source_settlement * (1 + best_momentum)
 
+        print(
+            f"[IWMC DEBUG] {target_asset}: source_settlement=${source_settlement:.4f}, "
+            f"best_momentum={best_momentum:.6f}, predicted_open=${predicted_open:.6f}"
+        )
+
         # Confidence based on momentum magnitude and carry factor
         confidence = min(0.9, abs(best_momentum) * 10 * best_carry_factor)
 
@@ -277,65 +363,101 @@ class InterWindowMomentumCarry:
         return prediction
 
     def evaluate_entry_signal(
-        self, target_asset: str, current_kalshi_price: float, time_remaining: int
+        self,
+        target_asset: str,
+        current_kalshi_price: float,
+        strike_price: float,
+        spot_prices: List[float],
+        time_remaining: int,
     ) -> Optional[Dict]:
         """
-        Evaluate if there's an IWMC entry signal.
+        Evaluate if there's an IWMC entry signal using probability-based framework.
 
-        Returns signal dict with direction, size, confidence, or None.
+        Framework:
+        1. Predict expiry price (μ) using momentum carry
+        2. Estimate 15-minute volatility (σ)
+        3. Calculate P_win = P(S_T > K) = 1 - Φ((K - μ) / σ)
+        4. Signal if P_win > price + fee + buffer
+
+        Args:
+            target_asset: Asset symbol (BTC, ETH, etc.)
+            current_kalshi_price: YES contract price ($0.01-$0.99)
+            strike_price: Window open price (the strike threshold)
+            spot_prices: Recent 1-minute spot prices for volatility estimation
+            time_remaining: Seconds until expiry
+
+        Returns:
+            Signal dict or None
         """
-        # Only trade in first 60 seconds of new window.
-        # time_remaining counts DOWN from ~900 at window open to 0 at expiry,
-        # so the first 60 seconds is when time_remaining > 840.
+        # Only trade in first 60 seconds of new window
         if time_remaining < 840:
             return None
 
+        # Get prediction from momentum carry model
         prediction = self.predict_next_window_open(target_asset, current_kalshi_price)
         if prediction is None:
             return None
 
-        # Check if Kalshi price deviates from prediction
-        deviation = (
-            current_kalshi_price - prediction.predicted_open_price
-        ) / prediction.predicted_open_price
-
-        # Require meaningful deviation (>0.5% or 50 bps)
-        if abs(deviation) < 0.005:
+        # Estimate volatility
+        volatility = self.estimate_volatility(target_asset, spot_prices)
+        if volatility is None or volatility <= 0:
+            # Can't estimate volatility → skip
             return None
 
-        # Direction: if Kalshi < predicted, buy YES (underpriced)
-        # If Kalshi > predicted, buy NO (overpriced)
-        if deviation < 0:
+        # Calculate win probability: P(S_T > K)
+        p_win = self.calculate_win_probability(
+            predicted_price=prediction.predicted_open_price,
+            strike=strike_price,
+            volatility=volatility,
+        )
+
+        # Calculate fee threshold
+        fee = self.kalshi_fee(current_kalshi_price)
+        threshold = current_kalshi_price + fee + 0.01  # 1¢ buffer
+
+        print(
+            f"[IWMC DEBUG] {target_asset}: P_win={p_win:.3f}, price=${current_kalshi_price:.2f}, "
+            f"fee=${fee:.4f}, threshold=${threshold:.3f}, μ=${prediction.predicted_open_price:.2f}, "
+            f"K={strike_price:.2f}, σ=${volatility:.4f}"
+        )
+
+        # Determine direction and check edge
+        if p_win > threshold:
+            # YES is underpriced → ENTER_YES
             direction = "ENTER_YES"
-        else:
+            edge = p_win - threshold
+        elif p_win < (1 - current_kalshi_price) - fee - 0.01:
+            # NO is underpriced (YES overpriced) → ENTER_NO
             direction = "ENTER_NO"
+            edge = (1 - current_kalshi_price - fee - 0.01) - p_win
+        else:
+            # No edge
+            return None
 
-        # Confidence-weighted sizing
-        base_confidence = prediction.confidence
-        deviation_confidence = min(
-            1.0, abs(deviation) * 50
-        )  # 1% deviation = 0.5 confidence
-        combined_confidence = (base_confidence + deviation_confidence) / 2
+        # Confidence based on edge magnitude
+        confidence = min(0.9, 0.3 + edge * 5)  # 2¢ edge → 0.4 conf, 10¢ edge → 0.8 conf
 
-        if combined_confidence < 0.3:
+        if confidence < 0.3:
             return None
 
         signal = {
             "direction": direction,
-            "confidence": combined_confidence,
-            "predicted_open": prediction.predicted_open_price,
+            "confidence": confidence,
+            "predicted_expiry": prediction.predicted_open_price,
+            "strike": strike_price,
+            "volatility": volatility,
+            "p_win": p_win,
             "current_price": current_kalshi_price,
-            "deviation": deviation,
+            "edge": edge,
             "source_asset": prediction.source_asset,
             "carry_factor": prediction.carry_factor,
             "strategy": "IWMC",
-            "reason": f"IWMC: {prediction.source_asset} carry {deviation:.4f} deviation from predicted ${prediction.predicted_open_price:.2f}",
+            "reason": f"IWMC: P_win={p_win:.1%} vs price=${current_kalshi_price:.2f}+fee (${edge:.2f} edge)",
         }
 
         print(
-            f"[IWMC] {target_asset} SIGNAL: {direction} | "
-            f"deviation={deviation:.4f} | conf={combined_confidence:.2f} | "
-            f"source={prediction.source_asset} | predicted=${prediction.predicted_open_price:.2f}"
+            f"[IWMC] {target_asset} SIGNAL: {direction} | P_win={p_win:.1%} | "
+            f"conf={confidence:.2f} | edge=${edge:.3f} | source={prediction.source_asset}"
         )
 
         return signal
@@ -430,13 +552,18 @@ class IWMCManager:
             )
 
     def get_signal(
-        self, asset: str, current_kalshi_price: float, time_remaining: int
+        self,
+        asset: str,
+        current_kalshi_price: float,
+        strike_price: float,
+        spot_prices: List[float],
+        time_remaining: int,
     ) -> Optional[Dict]:
         """Get IWMC signal for an asset."""
         if asset not in self.instances:
             return None
         return self.instances[asset].evaluate_entry_signal(
-            asset, current_kalshi_price, time_remaining
+            asset, current_kalshi_price, strike_price, spot_prices, time_remaining
         )
 
     def record_outcome(self, asset: str, actual_open_price: float):
